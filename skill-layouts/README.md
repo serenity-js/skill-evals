@@ -80,7 +80,8 @@ makes more difference.
 - **[GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli)**, as `copilot`, with
   `COPILOT_GITHUB_TOKEN` set to a token that can use Copilot, for Copilot's runs. `--agent kiro` runs without it
 - **A compiled clone of [serenity-js](https://github.com/serenity-js/serenity-js)**, on the branch with the skills
-  you're checking. The harness packs its packages, and its `bin/test-skills.ts` type-checks the skills' examples
+  you're checking. `eval:build-layouts` builds the layouts' core skills from it, the harness packs its packages,
+  and its `bin/test-skills.ts` type-checks the skills' examples
 - **A clone of [serenity-js-mocha-template](https://github.com/serenity-js/serenity-js-mocha-template)** with the
   commit `config.json` pins. By default, the harness looks for it next to the serenity-js clone
 - **No `~/.agents/skills`.** Copilot reads personal skills from there, whatever its home directory, so the harness
@@ -91,6 +92,7 @@ makes more difference.
 From the repository's root:
 
 ```bash
+pnpm run eval:build-layouts -- --serenity-js ~/Projects/serenity-js
 pnpm run eval:skill-layouts -- --check-references --serenity-js ~/Projects/serenity-js --out ~/skill-layouts
 pnpm run eval:skill-layouts -- --smoke --agent kiro --serenity-js ~/Projects/serenity-js --out ~/skill-layouts
 pnpm run eval:skill-layouts -- --pilot --agent kiro --serenity-js ~/Projects/serenity-js --out ~/skill-layouts
@@ -98,9 +100,13 @@ pnpm run eval:skill-layouts -- --pilot --agent copilot --serenity-js ~/Projects/
 pnpm run eval:skill-layouts -- --compare --pilot --out ~/skill-layouts
 ```
 
-That's the regression check: check the requests' reference solutions, check the harness with a smoke run, run the
-pilot with each agent, and read the layouts side by side in `~/skill-layouts/pilot/compare.md`. The summary, with
+That's the regression check: rebuild the layouts from the clone's skills, check the requests' reference solutions,
+check the harness with a smoke run, run the pilot with each agent, and read the layouts side by side in `~/skill-layouts/pilot/compare.md`. The summary, with
 the counts the decision rule reads, is in `~/skill-layouts/pilot/summary.md`.
+
+*Rebuild the layouts after every change to the skills.* The runs get the core skills of `layouts/`, which replace the
+skills in the clone's packed `@serenity-js/core`, so without `eval:build-layouts` the pilot checks the skills as they
+were last built, not the clone's.
 
 Other rounds:
 
