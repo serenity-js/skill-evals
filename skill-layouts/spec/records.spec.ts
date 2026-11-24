@@ -12,7 +12,11 @@ import { loadConfig } from '../src/runs.ts';
 const kiroRun: PlannedRun = { id: 'aaaa0001', agent: 'kiro', layout: 'b', request: '11-add-to-messy-code', repeat: 1 };
 const copilotRun: PlannedRun = { id: 'bbbb0001', agent: 'copilot', layout: 'none', request: '11-add-to-messy-code', repeat: 1 };
 
-const record = { id: 'aaaa0001', outcome: 'correct', checks: [ { item: 'checks', verdict: 'pass', evidence: [] } ], skillReads: [] };
+// the fields every result.json has, from the first pilot's on, and that the summary reads from each
+const record = {
+    id: 'aaaa0001', outcome: 'correct', checks: [ { item: 'checks', verdict: 'pass', evidence: [] } ], skillReads: [],
+    tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, durationMs: 1, timedOut: false, modelUnreported: false,
+};
 
 describe('the files the harness reads', () => {
 
@@ -79,6 +83,11 @@ describe('the files the harness reads', () => {
             [ 'missing skill reads', { ...record, skillReads: undefined }, 'skillReads is missing' ],
             [ 'a skill read without its file', { ...record, skillReads: [ { via: 'read' } ] }, 'skillReads[0].file is missing' ],
             [ 'a duration that is not a number', { ...record, durationMs: '1' }, 'durationMs is "1", not a number' ],
+            [ 'a missing duration', { ...record, durationMs: undefined }, 'durationMs is missing' ],
+            [ 'missing tokens', { ...record, tokens: undefined, tokensReported: true }, 'tokens is missing' ],
+            [ 'tokens without their output', { ...record, tokens: { input: 0, cacheRead: 0, cacheWrite: 0 } }, 'tokens.output is missing' ],
+            [ 'a missing timeout', { ...record, timedOut: undefined }, 'timedOut is missing' ],
+            [ 'a missing model unreported', { ...record, modelUnreported: undefined }, 'modelUnreported is missing' ],
             [ 'models that are not names', { ...record, models: [ 1 ] }, 'models[0] is 1, not a string' ],
             [ 'a timeout that is not true or false', { ...record, timedOut: 'no' }, 'timedOut is "no", not true or false' ],
         ])('names the field and the file for %s', (_, content, problem) => {

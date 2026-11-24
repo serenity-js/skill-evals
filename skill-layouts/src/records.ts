@@ -103,19 +103,21 @@ const VERDICTS = [ 'pass', 'fail', 'n/a' ] as const;
 const names = listOf(aString);
 const aCount = fields({ agent: aNumber, checks: aNumber });
 
-// the fields every result.json has, and those results scored by earlier versions of the harness may not have
+// the fields every result.json has, from the first pilot's on, and those results scored by earlier versions of the
+// harness may not have, or that only some runs have
 const RECORD = fields(
     {
         id: aString,
         outcome: oneOf(OUTCOMES),
         checks: listOf(fields({ item: aString, verdict: oneOf(VERDICTS) })),
         skillReads: listOf(fields({ file: aString })),
-    },
-    {
-        loading: fields({ right: aBoolean }),
         tokens: fields({ input: aNumber, cacheRead: aNumber, cacheWrite: aNumber, output: aNumber }),
         durationMs: aNumber,
         timedOut: aBoolean,
+        modelUnreported: aBoolean,
+    },
+    {
+        loading: fields({ right: aBoolean }),
         costUsd: aNumber,
         tokensReported: aBoolean,
         credits: aNumber,
@@ -129,7 +131,6 @@ const RECORD = fields(
         models: names,
         modelAnswered: aBoolean,
         model: aString,
-        modelUnreported: aBoolean,
     },
 );
 
