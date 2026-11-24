@@ -415,5 +415,18 @@ describe('streams', () => {
 
             expect(parseCopilotStream(stream).reply).toBe('Added the scenario. Suggestions: replace PostAndCheck.');
         });
+
+        it("is empty when Copilot said nothing after its last tool call, as when a run timed out after a progress message", () => {
+            const stream = [
+                { type: 'session.start', data: { selectedModel: 'claude-sonnet-5.5' } },
+                { type: 'tool.execution_start', data: { toolCallId: 'c1', toolName: 'view', arguments: { path: 'spec/x.spec.ts' } } },
+                { type: 'tool.execution_complete', data: { toolCallId: 'c1', success: true, result: { content: '...' } } },
+                { type: 'assistant.message', data: { messageId: 'm1', content: "Now I'll add the scenario and run the tests." } },
+                { type: 'tool.execution_start', data: { toolCallId: 'c2', toolName: 'bash', arguments: { command: 'npm test' } } },
+                { type: 'result', usage: {} },
+            ].map(event => JSON.stringify(event)).join('\n');
+
+            expect(parseCopilotStream(stream).reply).toBe('');
+        });
     });
 });

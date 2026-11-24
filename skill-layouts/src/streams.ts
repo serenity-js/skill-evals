@@ -334,7 +334,10 @@ export function parseCopilotStream(stream: string, { timedOut = false }: { timed
     const models = called.length > 0 ? called : distinct(usage.map(call => text(call.model)));
     const resolved = events.find(event => event.type === 'session.auto_mode_resolved');
     const checkpoint = events.findLast(event => event.type === 'session.usage_checkpoint');
-    const messages = events.filter(event => event.type === 'assistant.message').map(event => text(data(event).content).trim()).filter(Boolean);
+    // what the agent said after its last tool call, as for Kiro: a progress message before it isn't the final reply
+    const lastCall = events.findLastIndex(event => event.type === 'tool.execution_start' || event.type === 'tool.execution_complete');
+    const messages = events.slice(lastCall + 1)
+        .filter(event => event.type === 'assistant.message').map(event => text(data(event).content).trim()).filter(Boolean);
 
     return {
         reply: messages.at(-1) ?? '',
