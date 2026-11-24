@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { CHECKLIST, type ChecklistItem, exercises, type Verdict } from './conventions.ts';
 import { LAYOUTS } from './layouts.ts';
-import type { Agent, PlannedRun, ReviewScores } from './review.ts';
+import { readPlan, readRecord, readScores } from './records.ts';
+import { type Agent, AGENTS, type PlannedRun, type ReviewScores } from './review.ts';
 import { modelsOf, type RunRecord } from './runs.ts';
 import { RUNS_PER_LAYOUT_FOR_A_DECISION, runsCount, tooSmallToDecide } from './summary.ts';
 
@@ -101,12 +102,11 @@ function sideBySide(results: string, layouts: string[], shown: Map<string, Score
  */
 export function compareResults(results: string, { agent }: { agent?: Agent } = {}): string {
     // a plan has runs of every agent; with an agent, only its runs, since a round run with --agent leaves the others without results for good
-    const planned = (JSON.parse(readFileSync(join(results, 'mapping.json'), 'utf8')) as PlannedRun[])
-        .filter(run => agent === undefined || run.agent === agent);
-    const scores = JSON.parse(readIf(join(results, 'review', 'scores.json')) ?? '{}') as ReviewScores;
+    const planned = readPlan(results, agent ? [ agent ] : AGENTS);
+    const scores = readScores(join(results, 'review', 'scores.json'));
     const scored: Scored[] = planned.flatMap(run => {
-        const result = readIf(join(results, 'runs', run.id, 'result.json'));
-        return result ? [ { run, record: JSON.parse(result) as RunRecord } ] : [];
+        const result = join(results, 'runs', run.id, 'result.json');
+        return existsSync(result) ? [ { run, record: readRecord(result) } ] : [];
     });
     const requests = [ ...new Set(planned.map(run => run.request)) ]
         .sort((one, other) => Number(one.split('-')[0]) - Number(other.split('-')[0]));

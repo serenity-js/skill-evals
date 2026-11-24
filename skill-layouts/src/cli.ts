@@ -17,11 +17,12 @@ import { type Check, CHECKLIST, conventionsScore } from './conventions.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
 import { compareResults } from './compare.ts';
+import { readPlan, readRecord, readScores } from './records.ts';
 import { checkReference, type ReferenceCheck, renderReferenceCheck } from './references.ts';
 import { loadRequests, type Request } from './requests.ts';
-import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, type ReviewScores, type RunKey, scoresTemplate } from './review.ts';
+import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, type RunKey, scoresTemplate } from './review.ts';
 import { renderSmoke, SMOKE_REQUEST, smokeChecks, smokeProblem } from './smoke.ts';
-import { checksOf, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, type RunRecord, runsFor, sandboxProblems, scoreRun, startRun, writeReviewPacket } from './runs.ts';
+import { checksOf, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, runsFor, sandboxProblems, scoreRun, startRun, writeReviewPacket } from './runs.ts';
 import { decideWhenComplete, renderSummary, type RunResult, summarise } from './summary.ts';
 
 export interface Arguments {
@@ -187,12 +188,11 @@ const keyOf = ({ agent, layout, request, repeat }: RunKey) => `${ agent } ${ lay
  * anything else.
  */
 export function checkPlan(mode: Mode, results: string): PlannedRun[] | undefined {
-    const mapping = join(results, 'mapping.json');
-    if (! existsSync(mapping)) {
+    if (! existsSync(join(results, 'mapping.json'))) {
         return undefined;
     }
     const keys = runsFor(mode, loadRequests());
-    const planned = JSON.parse(readFileSync(mapping, 'utf8')) as PlannedRun[];
+    const planned = readPlan(results);
     if (planned.map(keyOf).sort().join('\n') !== keys.map(keyOf).sort().join('\n')) {
         throw new Error(`this --out was planned with ${ described(planned) }, not ${ described(keys) }: pass another --out`);
     }
@@ -330,7 +330,7 @@ function reportSmoke(runs: PlannedRun[], results: string, review: string, config
     const problems = runs.flatMap(run => {
         const directory = join(results, 'runs', run.id);
         const resultFile = join(directory, 'result.json');
-        const record = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, 'utf8')) as RunRecord : undefined;
+        const record = existsSync(resultFile) ? readRecord(resultFile) : undefined;
         const packetFile = join(review, `${ run.id }.md`);
         const checks = smokeChecks({
             agent: run.agent,
@@ -368,13 +368,13 @@ function reportSmoke(runs: PlannedRun[], results: string, review: string, config
  * than the pin rewrites nothing, since that run should have stopped the evaluation.
  */
 export function reparseResults(results: string, { config = loadConfig(), agents = AGENTS }: { config?: Config, agents?: readonly Agent[] } = {}): void {
-    const planned = (JSON.parse(readFileSync(join(results, 'mapping.json'), 'utf8')) as PlannedRun[]).filter(run => agents.includes(run.agent));
+    const planned = readPlan(results, agents);
     const requests = requestsById();
     const reparsed = planned
         .filter(run => existsSync(join(results, 'runs', run.id, 'result.json')) && existsSync(join(results, 'runs', run.id, 'stream.jsonl')))
         .map(run => {
             const directory = join(results, 'runs', run.id);
-            return { file: join(directory, 'result.json'), ...reparseRecord(run, requests.get(run.request)!, JSON.parse(readFileSync(join(directory, 'result.json'), 'utf8')) as RunRecord, readFileSync(join(directory, 'stream.jsonl'), 'utf8'), config) };
+            return { file: join(directory, 'result.json'), ...reparseRecord(run, requests.get(run.request)!, readRecord(join(directory, 'result.json')), readFileSync(join(directory, 'stream.jsonl'), 'utf8'), config) };
         });
     const problems = reparsed.flatMap(({ problem }) => problem ?? []);
     if (problems.length > 0) {
@@ -402,8 +402,7 @@ function changesBetween(saved: Check[], checks: Check[]): string[] {
  * writes the review packets again, with the checklist as it is. A diff that doesn't apply rescores nothing.
  */
 export function rescoreChecks(results: string, { work, template, agents = AGENTS }: { work: string, template: string, agents?: readonly Agent[] }): Array<{ id: string, changes: string[] }> {
-    const planned = (JSON.parse(readFileSync(join(results, 'mapping.json'), 'utf8')) as PlannedRun[])
-        .filter(run => agents.includes(run.agent))
+    const planned = readPlan(results, agents)
         .filter(run => existsSync(join(results, 'runs', run.id, 'result.json')) && existsSync(join(results, 'runs', run.id, 'diff.patch')));
     const requests = requestsById();
     const { commit } = (JSON.parse(readFileSync(join(results, 'conditions.json'), 'utf8')) as Conditions).shared.template;
@@ -418,7 +417,7 @@ export function rescoreChecks(results: string, { work, template, agents = AGENTS
             if (! isKept) {
                 rebuildWorkingCopy(directory, { template, commit, fixture: requests.get(run.request)!.fixture }, diff);
             }
-            const record = JSON.parse(readFileSync(file, 'utf8')) as RunRecord;
+            const record = readRecord(file);
             const checks = checksOf(directory, diff);
             return [ { run, file, record: { ...record, checks, checksRescored: new Date().toISOString() }, changes: changesBetween(record.checks, checks) } ];
         }
@@ -441,7 +440,7 @@ export function rescoreChecks(results: string, { work, template, agents = AGENTS
 
     const review = join(results, 'review');
     const scoresFile = join(review, 'scores.json');
-    const scores = (existsSync(scoresFile) ? JSON.parse(readFileSync(scoresFile, 'utf8')) : {}) as ReviewScores;
+    const scores = readScores(scoresFile);
     for (const { run } of rescored) {
         scores[run.id] = { ...Object.fromEntries(CHECKLIST.map(item => [ item.id, '' ])), ...scores[run.id] };
         writeReviewPacket(run, requests.get(run.request)!, join(results, 'runs', run.id), review);
@@ -487,7 +486,7 @@ export async function rescoreResults(
     if (made.port !== config.apiServer.port) {
         throw new Error(`nothing rescored: the runs were made with the local API server on port ${ made.port }, but config.json sets ${ config.apiServer.port }, so the URLs in their code wouldn't answer: put the port back`);
     }
-    const planned = (JSON.parse(readFileSync(join(results, 'mapping.json'), 'utf8')) as PlannedRun[]).filter(run => agents.includes(run.agent));
+    const planned = readPlan(results, agents);
     const { rescored, remaining, missing } = await rescoreNetworkFailures(planned, requestsById(), results, work, config);
     log(`${ rescored } network failure(s) scored again; ${ remaining } not rescored${ missing.length > 0 ? `, ${ missing.length } of them without a run directory in ${ work }` : '' }`);
 }
@@ -499,15 +498,13 @@ export async function rescoreResults(
  * and the decision waits for all of their runs.
  */
 export function summariseResults(results: string, { agent }: { agent?: Agent } = {}): void {
-    const planned = (JSON.parse(readFileSync(join(results, 'mapping.json'), 'utf8')) as PlannedRun[])
-        .filter(run => agent === undefined || run.agent === agent);
-    const scoresFile = join(results, 'review', 'scores.json');
-    const scores = existsSync(scoresFile) ? JSON.parse(readFileSync(scoresFile, 'utf8')) as ReviewScores : {};
+    const planned = readPlan(results, agent ? [ agent ] : AGENTS);
+    const scores = readScores(join(results, 'review', 'scores.json'));
     const done = new Set(existsSync(join(results, 'runs')) ? readdirSync(join(results, 'runs')) : []);
 
     const scored = planned
         .filter(run => done.has(run.id) && existsSync(join(results, 'runs', run.id, 'result.json')))
-        .map(run => ({ run, record: JSON.parse(readFileSync(join(results, 'runs', run.id, 'result.json'), 'utf8')) as RunRecord }));
+        .map(run => ({ run, record: readRecord(join(results, 'runs', run.id, 'result.json')) }));
 
     const runResults: RunResult[] = scored.map(({ run, record }) => ({
         ...run,

@@ -13,6 +13,7 @@ import { evalRoot, type Layout, LAYOUTS } from './layouts.ts';
 import { scoreLoading, type LoadingScore } from './loading.ts';
 import { agentFailureOf, type CommandResult, type Outcome, outcomeOf, probesFor, rescore, testWithRetries, unreachable } from './outcome.ts';
 import { addedLinesOf, withLocalApi } from './project.ts';
+import { readConfig, readRecord } from './records.ts';
 import { promptFor, type Request, type Requests } from './requests.ts';
 import { type Agent, AGENTS, type PlannedRun, reviewPacket, type RunKey } from './review.ts';
 import { type AutoMode, parseCopilotStream, parseKiroStream, type SkillRead, type Tokens } from './streams.ts';
@@ -100,7 +101,7 @@ export interface Config {
 }
 
 export function loadConfig(root: string = evalRoot): Config {
-    return JSON.parse(readFileSync(join(root, 'config.json'), 'utf8')) as Config;
+    return readConfig(join(root, 'config.json'));
 }
 
 /** What scoring records about a run, without its layout, agent or request, which only mapping.json holds. */
@@ -576,7 +577,7 @@ export async function rescoreNetworkFailures(
     const counts = { rescored: 0, remaining: 0, missing: [] as string[] };
     for (const run of planned) {
         const file = join(results, 'runs', run.id, 'result.json');
-        const record = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) as RunRecord : undefined;
+        const record = existsSync(file) ? readRecord(file) : undefined;
         if (record?.outcome !== 'network-failure') {
             continue;
         }

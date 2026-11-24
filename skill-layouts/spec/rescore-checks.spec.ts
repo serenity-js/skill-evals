@@ -53,7 +53,7 @@ describe('rescoreChecks', () => {
         writeFileSync(join(results, 'conditions.json'), JSON.stringify({ shared: { template: { commit: git(template, 'rev-parse', 'HEAD') } }, agents: {} }));
         for (const { id } of runs) {
             mkdirSync(join(results, 'runs', id), { recursive: true });
-            writeFileSync(join(results, 'runs', id, 'result.json'), JSON.stringify({ id, outcome: 'correct', checks: savedChecks, testAttempts: 1 }, null, 2));
+            writeFileSync(join(results, 'runs', id, 'result.json'), JSON.stringify({ id, outcome: 'correct', checks: savedChecks, skillReads: [], testAttempts: 1 }, null, 2));
             writeFileSync(join(results, 'runs', id, 'diff.patch'), diffOf(id as FixtureRun));
         }
         writeFileSync(join(results, 'review', 'scores.json'), JSON.stringify({ '89a97301': { 'structure': 'pass', 'tasks-for-steps': '' } }));
