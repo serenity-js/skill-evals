@@ -1,0 +1,25 @@
+{
+  "name": "@serenity-js/skill-evals",
+  "private": true,
+  "description": "Evaluations of the agent skills Serenity/JS packages ship",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": "^24.15.0"
+  },
+  "packageManager": "pnpm@12.10.1",
+  "scripts": {
+    "test": "pnpm run test:types && pnpm run test:unit",
+    "test:types": "tsc --noEmit",
+    "test:unit": "vitest run",
+    "eval:skill-layouts": "node skill-layouts/src/cli.ts",
+    "eval:build-layouts": "node skill-layouts/src/build-layouts.ts"
+  },
+  "devDependencies": {
+    "@ast-grep/napi": "0.51.2",
+    "@types/node": "24.19.2",
+    "mathjs": "15.2.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

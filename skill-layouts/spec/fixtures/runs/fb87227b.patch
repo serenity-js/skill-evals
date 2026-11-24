@@ -1,0 +1,52 @@
+diff --git a/spec/precision.spec.ts b/spec/precision.spec.ts
+index 753a1b4..c6d7ca3 100644
+--- a/spec/precision.spec.ts
++++ b/spec/precision.spec.ts
+@@ -4,6 +4,12 @@ import { Ensure, equals, includes } from '@serenity-js/assertions';
+ import { actorCalled } from '@serenity-js/core';
+ import { LastResponse, PostRequest, Send } from '@serenity-js/rest';
+ 
++import { CalculatedResult, CalculateRoundedTo } from '../src/precision';
++
++enum Role {
++    Mathematician = 'Apisitt, the mathematician',
++}
++
+ describe('Precision', () => {
+ 
+     it('rounds a result to the given number of significant digits', () =>
+@@ -35,4 +41,10 @@ describe('Precision', () => {
+             Ensure.that(LastResponse.body<{ result: string[], error: string | null }>().result.length, equals(1)),
+             Ensure.that(LastResponse.body<{ result: string[], error: string | null }>().result[0], equals('1.84e+19')),
+         ));
++
++    it('rounds a repeating decimal up to the given number of significant digits', () =>
++        actorCalled(Role.Mathematician).attemptsTo(
++            CalculateRoundedTo('2 / 3', 3),
++            Ensure.that(CalculatedResult(), equals('0.667')),
++        ));
+ });
+diff --git a/src/precision.ts b/src/precision.ts
+index 38eb7f3..3bfba55 100644
+--- a/src/precision.ts
++++ b/src/precision.ts
+@@ -1,5 +1,5 @@
+ import { Ensure, equals, includes } from '@serenity-js/assertions';
+-import { Task } from '@serenity-js/core';
++import { Answerable, QuestionAdapter, Task, the } from '@serenity-js/core';
+ import { LastResponse, PostRequest, Send } from '@serenity-js/rest';
+ 
+ export const PostAndCheck = (expression: string, precision: number, expected: string) =>
+@@ -13,3 +13,12 @@ export const PostAndCheck = (expression: string, precision: number, expected: st
+         Send.a(PostRequest.to('/v4').with({ expr: [ expression ] })),
+         Ensure.that(LastResponse.status(), equals(200)),
+     );
++
++export const CalculateRoundedTo = (expression: Answerable<string>, significantDigits: Answerable<number>): Task =>
++    Task.where(the`#actor calculates ${ expression } rounded to ${ significantDigits } significant digits`,
++        Send.a(PostRequest.to('/v4').with({ expr: [ expression ], precision: significantDigits })),
++    );
++
++export const CalculatedResult = (): QuestionAdapter<string> =>
++    LastResponse.body<{ result: string[], error: string | null }>().result[0]
++        .describedAs('the calculated result');

@@ -1,0 +1,101 @@
+{
+  "requests": [
+    {
+      "id": "1-new-feature",
+      "kind": "Write a scenario for a new feature, described in two sentences",
+      "prompt": "The math.js API can convert between units. Add a scenario that checks that converting 5 inches to centimetres gives 12.7 cm.",
+      "needs": [ "tests" ],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "2-step-that-does-several-things",
+      "kind": "Add a step that does several things the scenarios repeat",
+      "prompt": "Our scenarios keep sending an expression to the API and then checking the request succeeded before they check the result. Add a step that sends the expression and makes sure the calculation succeeded, and use it in the scenario that calculates a single expression.",
+      "needs": [ "tasks", "questions" ],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "3-check-a-value",
+      "kind": "Check a value the system returns",
+      "prompt": "In the scenario that calculates multiple expressions in one request, also check that the second result is smaller than the first.",
+      "needs": [ "questions", "tests" ],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "4-new-http-api",
+      "kind": "Talk to an HTTP API the project doesn't use yet",
+      "prompt": "We need to check exchange rates too. Add a scenario that gets the latest rate from euros to US dollars from the Frankfurter API, at {{frankfurter}}/latest?base=EUR&symbols=USD, and checks that it's a positive number.",
+      "needs": [ "questions", "tests" ],
+      "apis": [ "mathjs", "frankfurter" ]
+    },
+    {
+      "id": "5-step-that-does-not-wait",
+      "kind": "Fix a scenario that fails because a step doesn't wait for the system",
+      "prompt": "The scenario in spec/calculation_jobs.spec.ts fails, although the calculation jobs work. Fix the scenario.",
+      "needs": [ "tasks" ],
+      "fixture": "calculation-jobs",
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "6-duplication",
+      "kind": "Remove duplication across three scenarios",
+      "prompt": "The three scenarios in spec/precision.spec.ts repeat the same steps. Remove the duplication.",
+      "needs": [ "tasks", "questions" ],
+      "fixture": "precision",
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "7-rename-a-concept",
+      "kind": "Rename a concept everywhere it appears in the tests",
+      "prompt": "The business now calls expressions \"formulas\". Rename the concept everywhere it appears in the tests, including what the test reports say.",
+      "needs": [ "tests" ],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "8-control",
+      "kind": "A control: a change that needs no skill",
+      "prompt": "Update the README so its prerequisites say Node.js 22 or later.",
+      "needs": [],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "9-new-interface",
+      "kind": "Use an interface no Serenity/JS integration covers",
+      "prompt": "The calculation jobs service also accepts jobs as files: it picks up an expression written to a file in the directory given by JOBS_DIR, and writes the result to a file of the same name in the directory given by RESULTS_DIR. Add a scenario that submits a job by writing a file, and checks the result file.",
+      "needs": [ "abilities", "interactions", "questions", "tests" ],
+      "fixture": "calculation-job-results",
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "10-check-each",
+      "kind": "Repeat the same check for each item of a list",
+      "prompt": "Add a scenario that checks these expressions give these results: 2 + 2 is 4, 10 / 4 is 2.5, 3 * 3 is 9.",
+      "needs": [ "tasks", "tests" ],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "11-add-to-messy-code",
+      "kind": "Add to code with poor abstractions",
+      "prompt": "Add a scenario to spec/precision.spec.ts that checks 2 / 3 rounded to 3 significant digits.",
+      "needs": [ "tasks", "tests" ],
+      "fixture": "precision",
+      "apis": [ "mathjs" ]
+    }
+  ],
+  "heldBack": [
+    {
+      "id": "12-check-a-value",
+      "kind": "Check a value the system returns",
+      "prompt": "Add a scenario that calculates 10 / 4 and 3 * 3 in one request, and checks that the two results add up to 11.5.",
+      "needs": [ "questions", "tests" ],
+      "apis": [ "mathjs" ]
+    },
+    {
+      "id": "13-new-feature",
+      "kind": "Write a scenario for a new feature, described in two sentences",
+      "prompt": "The math.js API can calculate with matrices. Add a scenario that checks that the determinant of the matrix [[1, 2], [3, 4]] is -2.",
+      "needs": [ "tests" ],
+      "apis": [ "mathjs" ]
+    }
+  ]
+}

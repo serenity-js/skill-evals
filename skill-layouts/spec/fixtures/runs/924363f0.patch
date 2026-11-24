@@ -1,0 +1,118 @@
+diff --git a/spec/calculation_jobs.spec.ts b/spec/calculation_jobs.spec.ts
+index 4091c2c..cd0e838 100644
+--- a/spec/calculation_jobs.spec.ts
++++ b/spec/calculation_jobs.spec.ts
+@@ -3,7 +3,7 @@ import 'mocha';
+ import { Ensure, equals } from '@serenity-js/assertions';
+ import { actorCalled, Wait } from '@serenity-js/core';
+ 
+-import { CalculateInBackground, ResultOfLastJob, StatusOfLastJob } from '../src/calculation-jobs';
++import { CalculateFromFile, CalculateInBackground, ResultFileOfLastJob, ResultOfLastJob, StatusOfLastJob } from '../src/calculation-jobs';
+ 
+ describe('Calculation jobs', () => {
+ 
+@@ -13,4 +13,11 @@ describe('Calculation jobs', () => {
+             Wait.until(StatusOfLastJob(), equals('done')),
+             Ensure.that(ResultOfLastJob(), equals('4')),
+         ));
++
++    it('calculate expressions submitted as files', () =>
++        actorCalled('Jobson').attemptsTo(
++            CalculateFromFile('2 + 2'),
++            Wait.until(ResultFileOfLastJob(), equals('4')),
++            Ensure.that(ResultFileOfLastJob(), equals('4')),
++        ));
+ });
+diff --git a/src/calculation-jobs/CalculationJobs.ts b/src/calculation-jobs/CalculationJobs.ts
+index 0e94ada..eb145ca 100644
+--- a/src/calculation-jobs/CalculationJobs.ts
++++ b/src/calculation-jobs/CalculationJobs.ts
+@@ -15,8 +15,8 @@ export class CalculationJobs {
+     private nextId = 1;
+ 
+     constructor(
+-        private readonly jobsDirectory: string,
+-        private readonly resultsDirectory: string,
++        readonly jobsDirectory: string,
++        readonly resultsDirectory: string,
+         private readonly processingTimeInMilliseconds = 500,
+         pollingIntervalInMilliseconds = 100,
+     ) {
+diff --git a/src/calculation-jobs/RunCalculationJobs.ts b/src/calculation-jobs/RunCalculationJobs.ts
+index bd94bac..c1897b1 100644
+--- a/src/calculation-jobs/RunCalculationJobs.ts
++++ b/src/calculation-jobs/RunCalculationJobs.ts
+@@ -1,4 +1,7 @@
+ import { Ability } from '@serenity-js/core';
++import { randomUUID } from 'crypto';
++import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs';
++import path from 'path';
+ 
+ import { CalculationJobs } from './CalculationJobs';
+ 
+@@ -8,6 +11,8 @@ export class RunCalculationJobs extends Ability {
+     }
+ 
+     private lastJobId: string | undefined;
++    private readonly jobFileNames: string[] = [];
++    private lastJobFileName: string | undefined;
+ 
+     constructor(private readonly jobs: CalculationJobs) {
+         super();
+@@ -24,4 +29,26 @@ export class RunCalculationJobs extends Ability {
+     resultOfLastJob(): string | undefined {
+         return this.lastJobId ? this.jobs.result(this.lastJobId) : undefined;
+     }
++
++    submitAsFile(expression: string): void {
++        const fileName = `${ randomUUID() }.txt`;
++        this.jobFileNames.push(fileName);
++        this.lastJobFileName = fileName;
++        writeFileSync(path.join(this.jobs.jobsDirectory, fileName), expression);
++    }
++
++    resultOfLastJobFile(): string | undefined {
++        const resultFile = this.lastJobFileName && path.join(this.jobs.resultsDirectory, this.lastJobFileName);
++
++        return resultFile && existsSync(resultFile)
++            ? readFileSync(resultFile, 'utf8')
++            : undefined;
++    }
++
++    discard(): void {
++        for (const fileName of this.jobFileNames) {
++            rmSync(path.join(this.jobs.jobsDirectory, fileName), { force: true });
++            rmSync(path.join(this.jobs.resultsDirectory, fileName), { force: true });
++        }
++    }
+ }
+diff --git a/src/calculation-jobs/activities.ts b/src/calculation-jobs/activities.ts
+index 49bb45f..56a1308 100644
+--- a/src/calculation-jobs/activities.ts
++++ b/src/calculation-jobs/activities.ts
+@@ -12,6 +12,16 @@ export const CalculateInBackground = (expression: Answerable<string>) =>
+         SubmitAJob(expression),
+     );
+ 
++const WriteAJobFile = (expression: Answerable<string>): Interaction =>
++    Interaction.where(the`#actor writes a job file containing ${ expression }`, async actor => {
++        RunCalculationJobs.as(actor).submitAsFile(await actor.answer(expression));
++    });
++
++export const CalculateFromFile = (expression: Answerable<string>): Task =>
++    Task.where(the`#actor calculates ${ expression } by submitting a job file`,
++        WriteAJobFile(expression),
++    );
++
+ export const StatusOfLastJob = () =>
+     Question.about('the status of the last job', actor =>
+         RunCalculationJobs.as(actor).statusOfLastJob()
+@@ -21,3 +31,8 @@ export const ResultOfLastJob = () =>
+     Question.about('the result of the last job', actor =>
+         RunCalculationJobs.as(actor).resultOfLastJob()
+     );
++
++export const ResultFileOfLastJob = (): Question<Promise<string | undefined>> =>
++    Question.about('the contents of the result file of the last job file', actor =>
++        RunCalculationJobs.as(actor).resultOfLastJobFile()
++    );

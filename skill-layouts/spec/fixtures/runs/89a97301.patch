@@ -1,0 +1,59 @@
+diff --git a/spec/precision.spec.ts b/spec/precision.spec.ts
+index 753a1b4..f5e3f51 100644
+--- a/spec/precision.spec.ts
++++ b/spec/precision.spec.ts
+@@ -4,6 +4,8 @@ import { Ensure, equals, includes } from '@serenity-js/assertions';
+ import { actorCalled } from '@serenity-js/core';
+ import { LastResponse, PostRequest, Send } from '@serenity-js/rest';
+ 
++import { CalculatedResults, CalculateWithPrecision, CalculationError } from '../src/precision';
++
+ describe('Precision', () => {
+ 
+     it('rounds a result to the given number of significant digits', () =>
+@@ -35,4 +37,12 @@ describe('Precision', () => {
+             Ensure.that(LastResponse.body<{ result: string[], error: string | null }>().result.length, equals(1)),
+             Ensure.that(LastResponse.body<{ result: string[], error: string | null }>().result[0], equals('1.84e+19')),
+         ));
++
++    it('rounds a repeating decimal to 3 significant digits', () =>
++        actorCalled('Apisitt').attemptsTo(
++            CalculateWithPrecision('2 / 3', 3),
++            Ensure.that(LastResponse.status(), equals(200)),
++            Ensure.that(CalculationError(), equals(null)),   // eslint-disable-line unicorn/no-null
++            Ensure.that(CalculatedResults(), equals([ '0.667' ])),
++        ));
+ });
+diff --git a/src/precision.ts b/src/precision.ts
+index 38eb7f3..68b9190 100644
+--- a/src/precision.ts
++++ b/src/precision.ts
+@@ -1,5 +1,5 @@
+ import { Ensure, equals, includes } from '@serenity-js/assertions';
+-import { Task } from '@serenity-js/core';
++import { QuestionAdapter, Task, the } from '@serenity-js/core';
+ import { LastResponse, PostRequest, Send } from '@serenity-js/rest';
+ 
+ export const PostAndCheck = (expression: string, precision: number, expected: string) =>
+@@ -13,3 +13,21 @@ export const PostAndCheck = (expression: string, precision: number, expected: st
+         Send.a(PostRequest.to('/v4').with({ expr: [ expression ] })),
+         Ensure.that(LastResponse.status(), equals(200)),
+     );
++
++interface CalculatedExpressions {
++    result: string[];
++    error: string | null;
++}
++
++export const CalculateWithPrecision = (expression: string, precision: number): Task =>
++    Task.where(the`#actor calculates ${ expression } to ${ precision } significant digits`,
++        Send.a(PostRequest.to('/v4').with({ expr: [ expression ], precision })),
++    );
++
++export const CalculationError = (): QuestionAdapter<string | null> =>
++    LastResponse.body<CalculatedExpressions>().error
++        .describedAs('the calculation error');
++
++export const CalculatedResults = (): QuestionAdapter<string[]> =>
++    LastResponse.body<CalculatedExpressions>().result
++        .describedAs('the calculated results');

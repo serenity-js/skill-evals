@@ -1,0 +1,133 @@
+diff --git a/spec/calculation_jobs.spec.ts b/spec/calculation_jobs.spec.ts
+index 4091c2c..6d7a723 100644
+--- a/spec/calculation_jobs.spec.ts
++++ b/spec/calculation_jobs.spec.ts
+@@ -3,7 +3,7 @@ import 'mocha';
+ import { Ensure, equals } from '@serenity-js/assertions';
+ import { actorCalled, Wait } from '@serenity-js/core';
+ 
+-import { CalculateInBackground, ResultOfLastJob, StatusOfLastJob } from '../src/calculation-jobs';
++import { CalculateInBackground, CalculateUsingJobFile, ResultOfLastJob, ResultOfLastJobFile, StatusOfLastJob } from '../src/calculation-jobs';
+ 
+ describe('Calculation jobs', () => {
+ 
+@@ -13,4 +13,10 @@ describe('Calculation jobs', () => {
+             Wait.until(StatusOfLastJob(), equals('done')),
+             Ensure.that(ResultOfLastJob(), equals('4')),
+         ));
++
++    it('calculate expressions submitted as files', () =>
++        actorCalled('Jobson').attemptsTo(
++            CalculateUsingJobFile('2 + 2'),
++            Ensure.that(ResultOfLastJobFile(), equals('4')),
++        ));
+ });
+diff --git a/src/calculation-jobs/CalculationJobs.ts b/src/calculation-jobs/CalculationJobs.ts
+index 0e94ada..0bc7d70 100644
+--- a/src/calculation-jobs/CalculationJobs.ts
++++ b/src/calculation-jobs/CalculationJobs.ts
+@@ -15,8 +15,8 @@ export class CalculationJobs {
+     private nextId = 1;
+ 
+     constructor(
+-        private readonly jobsDirectory: string,
+-        private readonly resultsDirectory: string,
++        public readonly jobsDirectory: string,
++        public readonly resultsDirectory: string,
+         private readonly processingTimeInMilliseconds = 500,
+         pollingIntervalInMilliseconds = 100,
+     ) {
+diff --git a/src/calculation-jobs/RunCalculationJobs.ts b/src/calculation-jobs/RunCalculationJobs.ts
+index bd94bac..991506f 100644
+--- a/src/calculation-jobs/RunCalculationJobs.ts
++++ b/src/calculation-jobs/RunCalculationJobs.ts
+@@ -1,4 +1,7 @@
+ import { Ability } from '@serenity-js/core';
++import { randomUUID } from 'crypto';
++import { existsSync, readFileSync, writeFileSync } from 'fs';
++import path from 'path';
+ 
+ import { CalculationJobs } from './CalculationJobs';
+ 
+@@ -8,6 +11,7 @@ export class RunCalculationJobs extends Ability {
+     }
+ 
+     private lastJobId: string | undefined;
++    private lastJobFileName: string | undefined;
+ 
+     constructor(private readonly jobs: CalculationJobs) {
+         super();
+@@ -24,4 +28,30 @@ export class RunCalculationJobs extends Ability {
+     resultOfLastJob(): string | undefined {
+         return this.lastJobId ? this.jobs.result(this.lastJobId) : undefined;
+     }
++
++    /**
++     * Submits the job by writing the expression to a uniquely named file in the jobs directory,
++     * so that a result left over from an earlier run can't be mistaken for this job's.
++     */
++    submitAsFile(expression: string): void {
++        this.lastJobFileName = `${ randomUUID() }.txt`;
++        writeFileSync(path.join(this.jobs.jobsDirectory, this.lastJobFileName), expression);
++    }
++
++    /**
++     * The contents of the result file of the last job submitted as a file,
++     * or `undefined` until the service has written them.
++     */
++    resultOfLastJobFile(): string | undefined {
++        if (! this.lastJobFileName) {
++            return undefined;
++        }
++
++        const resultFile = path.join(this.jobs.resultsDirectory, this.lastJobFileName);
++
++        // a file that's still being written is empty
++        return existsSync(resultFile)
++            ? readFileSync(resultFile, 'utf8') || undefined
++            : undefined;
++    }
+ }
+diff --git a/src/calculation-jobs/activities.ts b/src/calculation-jobs/activities.ts
+index 49bb45f..b108afa 100644
+--- a/src/calculation-jobs/activities.ts
++++ b/src/calculation-jobs/activities.ts
+@@ -1,4 +1,5 @@
+-import { Answerable, Interaction, Question, Task, the } from '@serenity-js/core';
++import { isPresent } from '@serenity-js/assertions';
++import { Answerable, Interaction, Question, Task, the, Wait } from '@serenity-js/core';
+ 
+ import { RunCalculationJobs } from './RunCalculationJobs';
+ 
+@@ -7,11 +8,22 @@ const SubmitAJob = (expression: Answerable<string>) =>
+         RunCalculationJobs.as(actor).submit(await actor.answer(expression));
+     });
+ 
++const WriteAJobFile = (expression: Answerable<string>) =>
++    Interaction.where(the`#actor writes a job file to calculate ${ expression }`, async actor => {
++        RunCalculationJobs.as(actor).submitAsFile(await actor.answer(expression));
++    });
++
+ export const CalculateInBackground = (expression: Answerable<string>) =>
+     Task.where(the`#actor calculates ${ expression } in the background`,
+         SubmitAJob(expression),
+     );
+ 
++export const CalculateUsingJobFile = (expression: Answerable<string>) =>
++    Task.where(the`#actor calculates ${ expression } using a job file`,
++        WriteAJobFile(expression),
++        Wait.until(ResultOfLastJobFile(), isPresent()),
++    );
++
+ export const StatusOfLastJob = () =>
+     Question.about('the status of the last job', actor =>
+         RunCalculationJobs.as(actor).statusOfLastJob()
+@@ -21,3 +33,8 @@ export const ResultOfLastJob = () =>
+     Question.about('the result of the last job', actor =>
+         RunCalculationJobs.as(actor).resultOfLastJob()
+     );
++
++export const ResultOfLastJobFile = () =>
++    Question.about('the result file of the last job', actor =>
++        RunCalculationJobs.as(actor).resultOfLastJobFile()
++    );

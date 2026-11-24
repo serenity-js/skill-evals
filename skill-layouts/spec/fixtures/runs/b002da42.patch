@@ -1,0 +1,82 @@
+diff --git a/spec/calculation_jobs.spec.ts b/spec/calculation_jobs.spec.ts
+index 4091c2c..7db2391 100644
+--- a/spec/calculation_jobs.spec.ts
++++ b/spec/calculation_jobs.spec.ts
+@@ -3,7 +3,7 @@ import 'mocha';
+ import { Ensure, equals } from '@serenity-js/assertions';
+ import { actorCalled, Wait } from '@serenity-js/core';
+ 
+-import { CalculateInBackground, ResultOfLastJob, StatusOfLastJob } from '../src/calculation-jobs';
++import { CalculateInBackground, CalculateViaJobFile, ResultFileOfLastJobFile, ResultOfLastJob, StatusOfLastJob } from '../src/calculation-jobs';
+ 
+ describe('Calculation jobs', () => {
+ 
+@@ -13,4 +13,11 @@ describe('Calculation jobs', () => {
+             Wait.until(StatusOfLastJob(), equals('done')),
+             Ensure.that(ResultOfLastJob(), equals('4')),
+         ));
++
++    it('calculate expressions submitted as job files', () =>
++        actorCalled('Jobson').attemptsTo(
++            CalculateViaJobFile('2 + 3'),
++            Wait.until(ResultFileOfLastJobFile(), equals('5')),
++            Ensure.that(ResultFileOfLastJobFile(), equals('5')),
++        ));
+ });
+diff --git a/src/calculation-jobs/activities.ts b/src/calculation-jobs/activities.ts
+index 49bb45f..f71ff54 100644
+--- a/src/calculation-jobs/activities.ts
++++ b/src/calculation-jobs/activities.ts
+@@ -1,4 +1,7 @@
+-import { Answerable, Interaction, Question, Task, the } from '@serenity-js/core';
++import { Answerable, Interaction, notes, Question, Task, the } from '@serenity-js/core';
++import { randomUUID } from 'crypto';
++import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
++import { join } from 'path';
+ 
+ import { RunCalculationJobs } from './RunCalculationJobs';
+ 
+@@ -21,3 +24,43 @@ export const ResultOfLastJob = () =>
+     Question.about('the result of the last job', actor =>
+         RunCalculationJobs.as(actor).resultOfLastJob()
+     );
++
++const jobsDirectory = (): string => requiredEnvironmentVariable('JOBS_DIR');
++const resultsDirectory = (): string => requiredEnvironmentVariable('RESULTS_DIR');
++
++function requiredEnvironmentVariable(name: string): string {
++    const value = process.env[name];
++    if (! value) {
++        throw new Error(`${ name } environment variable is not set`);
++    }
++    return value;
++}
++
++const WriteAJobFile = (fileName: string, expression: Answerable<string>) =>
++    Interaction.where(the`#actor writes a job file containing ${ expression }`, async actor => {
++        mkdirSync(jobsDirectory(), { recursive: true });
++        writeFileSync(join(jobsDirectory(), fileName), await actor.answer(expression));
++    });
++
++export const CalculateViaJobFile = (expression: Answerable<string>) => {
++    // a unique name per job, so that a result file can't be mistaken for one from another scenario
++    const fileName = `job-${ randomUUID() }.txt`;
++
++    return Task.where(the`#actor calculates ${ expression } by writing a job file`,
++        WriteAJobFile(fileName, expression),
++        notes<{ jobFileName: string }>().set('jobFileName', fileName),
++    );
++};
++
++/**
++ * Contents of the result file for the job file written by the actor, or `undefined` until the service writes it.
++ */
++export const ResultFileOfLastJobFile = () =>
++    Question.about<Promise<string | undefined>>('the result file of the last job file', async actor => {
++        const fileName = await actor.answer(notes<{ jobFileName: string }>().get('jobFileName'));
++        const resultFile = join(resultsDirectory(), fileName);
++
++        return existsSync(resultFile)
++            ? readFileSync(resultFile, 'utf8').trim()
++            : undefined;
++    });

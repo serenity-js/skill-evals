@@ -1,0 +1,14 @@
+{
+  "models": {
+    "kiro": "claude-sonnet-5.5",
+    "copilot": "auto"
+  },
+  "template": {
+    "commit": "2315e1e465e5fcc9ac750a503ed688808cf9d464"
+  },
+  "apiServer": {
+    "port": 4170
+  },
+  "runTimeoutMinutes": 30,
+  "testTimeoutMinutes": 10
+}
