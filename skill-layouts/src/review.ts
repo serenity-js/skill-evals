@@ -5,10 +5,10 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
 import { CHECKLIST, type Check, type ChecklistItem, exercises, type Verdict } from './conventions.ts';
+import { evalRoot, type Layout } from './layouts.ts';
 
 const checklistLine = (item: typeof CHECKLIST[number]) =>
     `- [ ] ${ item.id }: ${ item.text }${ item.scoredBy === 'reviewer' ? ' (reviewer only: the AST patterns leave it n/a)' : '' }`;
-import { evalRoot, type Layout } from './layouts.ts';
 
 /** The rules the decisions made so far give the reviewer, each with the run it was made on */
 export const REVIEW_GUIDE = join(evalRoot, 'review-guide.md');

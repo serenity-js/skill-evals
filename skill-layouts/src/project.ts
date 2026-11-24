@@ -1,5 +1,5 @@
 // Builds what the runs start from: tarballs of the Serenity/JS packages with each layout's skills, and a copy of the
-// Mocha template that installs them, with the skills linked for Kiro and Claude Code as `npx skills` links them.
+// Mocha template that installs them, with the skills linked for Kiro and Copilot as `npx skills` links them.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -65,7 +65,8 @@ const BASE_API_URL = /BASE_API_URL=\S*/;
 
 /**
  * The manifest with its test script pointing the scenarios at the local API server, e.g. `http://127.0.0.1:4567/v4/`,
- * instead of api.mathjs.org. Each run gets a server on a port of its own, so the harness rewrites the script per run.
+ * instead of api.mathjs.org. Every run's server listens on the one port config.json sets, so every run gets the same
+ * script.
  */
 export function withLocalApi<M extends { scripts?: Record<string, string> }>(manifest: M, mathjsUrl: string): M & { scripts: Record<string, string> } {
     const test = manifest.scripts?.test ?? '';
@@ -246,10 +247,6 @@ export function checkTemplateCommit(template: string, commit: string): void {
 }
 
 /**
- * A copy of the template, at the pinned commit, with the layout's tarballs installed and its skills linked, checked:
- * one copy of `@serenity-js/core`, installed from the tarball, and the layout's skills linked for both agents.
- */
-/**
  * Installs the project's dependencies: the first time a layout is prepared for an --out, resolving them with npm
  * install and saving npm's lockfile in `savedLockfile`; after that, from that lockfile, with npm ci, so a resume, such
  * as the second agent's half of the pilot, gets the same third-party versions as the first.
@@ -267,6 +264,10 @@ export function installDependencies(project: string, savedLockfile: string, npm:
     cpSync(lockfile, savedLockfile);
 }
 
+/**
+ * A copy of the template, at the pinned commit, with the layout's tarballs installed and its skills linked, checked:
+ * one copy of `@serenity-js/core`, installed from the tarball, and the layout's skills linked for both agents.
+ */
 export function prepareProject(layout: Layout, template: { directory: string, commit: string }, tarballs: Record<string, string>, out: string, savedLockfile: string): string {
     const project = join(out, 'layouts', layout, 'project');
     rmSync(project, { recursive: true, force: true });
