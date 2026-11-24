@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 
-import type { Layout } from './layouts.ts';
+import { evalRoot, type Layout } from './layouts.ts';
 import type { Agent } from './review.ts';
 
 /** What every run of the evaluation shares, whichever agent it's of. */
@@ -21,6 +21,8 @@ export interface SharedConditions {
     lockfiles: Partial<Record<Layout, string>>;
     /** The port of the local API server, which the runs' test scripts and code name */
     apiServer: { port: number };
+    /** The hash of each fixture in `fixtures/` the planned requests start from */
+    fixtures: Record<string, string>;
 }
 
 /** What an agent's runs share: recorded when its first run starts, so its pin can change until then. */
@@ -50,6 +52,13 @@ export function hashOf(path: string): string {
         }
     }
     return `sha256:${ hash.digest('hex') }`;
+}
+
+/** The hash of each fixture the planned requests start from, once each, by its name in `fixtures/`. */
+export function fixtureHashes(fixtures: Array<string | undefined>, root: string = join(evalRoot, 'fixtures')): Record<string, string> {
+    return Object.fromEntries([ ...new Set(fixtures.filter((fixture): fixture is string => fixture !== undefined)) ]
+        .sort()
+        .map(fixture => [ fixture, hashOf(join(root, fixture)) ]));
 }
 
 function leaves(value: unknown, prefix = ''): Map<string, string> {

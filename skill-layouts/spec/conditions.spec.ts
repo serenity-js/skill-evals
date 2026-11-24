@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { changedConditions, checkConditions, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles, type SharedConditions } from '../src/conditions.ts';
+import { changedConditions, checkConditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles, type SharedConditions } from '../src/conditions.ts';
 import { writeFixtures } from '../src/cli.ts';
 import { evalRoot } from '../src/layouts.ts';
 
@@ -14,6 +14,7 @@ const shared: SharedConditions = {
     skills: { none: 'sha256:0000', a: 'sha256:1111', b: 'sha256:2222', c: 'sha256:3333' },
     lockfiles: { none: 'sha256:5555', b: 'sha256:6666' },
     apiServer: { port: 4170 },
+    fixtures: { precision: 'sha256:7777' },
 };
 const kiro = { model: 'claude-sonnet-5.5', version: 'kiro-cli 3.2.0' };
 const copilot = { model: 'claude-sonnet-5.5', version: 'GitHub Copilot CLI 1.0.91' };
@@ -37,6 +38,32 @@ describe('changedConditions', () => {
             'skills.b: sha256:2222, now sha256:4444',
             'apiServer.port: 4170, now 4171',
         ]);
+    });
+});
+
+describe('fixtureHashes', () => {
+
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'skill-layouts-fixtures-'));
+        cpSync(join(evalRoot, 'fixtures', 'precision'), join(root, 'precision'), { recursive: true });
+        cpSync(join(evalRoot, 'fixtures', 'calculation-jobs'), join(root, 'calculation-jobs'), { recursive: true });
+    });
+    afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+    it('hashes each fixture the planned requests start from, once, by its name', () => {
+        expect(fixtureHashes([ 'precision', undefined, 'calculation-jobs', 'precision' ], root)).toEqual({
+            'calculation-jobs': hashOf(join(root, 'calculation-jobs')),
+            'precision': hashOf(join(root, 'precision')),
+        });
+    });
+
+    it("changes when a file of a fixture changes, so a resume can't give new runs another starting project", () => {
+        const before = fixtureHashes([ 'precision' ], root);
+        writeFileSync(join(root, 'precision', 'src', 'precision.ts'), 'changed\n');
+
+        expect(fixtureHashes([ 'precision' ], root).precision).not.toBe(before.precision);
     });
 });
 
@@ -120,6 +147,19 @@ describe('the conditions of a resumed evaluation', () => {
 
         expect(() => checkConditions(file, { ...shared, requests: 'sha256:bbbb' }, { copilot }))
             .toThrow(/requests: sha256:aaaa, now sha256:bbbb/);
+    });
+
+    it("refuses a Copilot resume after a fixture of the plan changed, so the runs don't mix starting projects", () => {
+        kiroOnlyPilot();
+
+        expect(() => checkConditions(file, { ...shared, fixtures: { precision: 'sha256:8888' } }, { copilot }))
+            .toThrow(/fixtures.precision: sha256:7777, now sha256:8888/);
+    });
+
+    it('refuses a resume of runs whose conditions recorded no fixtures, made before they were recorded', () => {
+        writeFileSync(file, JSON.stringify({ shared: { ...shared, fixtures: undefined }, agents: { kiro } }));
+
+        expect(() => checkConditions(file, shared, { copilot })).toThrow(/fixtures.precision: none, now sha256:7777/);
     });
 
     it("refuses a Kiro resume after Kiro's pin changed", () => {

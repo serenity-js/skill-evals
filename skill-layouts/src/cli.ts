@@ -12,7 +12,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { ensurePortFree, withApiServer } from './api-server.ts';
-import { type AgentConditions, checkConditions, type Conditions, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles, savedLockfileOf } from './conditions.ts';
+import { type AgentConditions, checkConditions, type Conditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles, savedLockfileOf } from './conditions.ts';
 import { type Check, CHECKLIST, conventionsScore } from './conventions.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
@@ -243,6 +243,7 @@ async function evaluate(args: Arguments): Promise<void> {
     const versions = new Map(agents.map(agent => [ agent, versionOf(agent === 'kiro' ? 'kiro-cli' : 'copilot') ]));
     const agentConditions = (agent: Agent): AgentConditions => ({ model: config.models[agent], version: versions.get(agent)! });
     if (! args.prepareOnly) {
+        const requestOf = requestsById();
         checkConditions(conditionsFile, {
             template: { commit: config.template.commit },
             serenityJs: { commit: execFileSync('git', [ 'rev-parse', 'HEAD' ], { cwd: args.serenityJs, encoding: 'utf8' }).trim() },
@@ -250,6 +251,7 @@ async function evaluate(args: Arguments): Promise<void> {
             skills: Object.fromEntries(layouts.map(layout => [ layout, hashOf(join(evalRoot, 'layouts', layout)) ])),
             lockfiles: lockfileHashes(results, layouts),
             apiServer: config.apiServer,
+            fixtures: fixtureHashes(keys.map(key => requestOf.get(key.request)?.fixture)),
         }, Object.fromEntries(agents.map(agent => [ agent, agentConditions(agent) ])), config.models);
     }
 

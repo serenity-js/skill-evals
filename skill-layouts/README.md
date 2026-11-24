@@ -569,8 +569,8 @@ make, and of their errors.
 
 A stopped evaluation resumes: runs with a `result.json` are skipped, and `mapping.json` keeps their IDs. The
 harness records the conditions in `conditions.json`: the shared ones before the first run, which are the template's
-and serenity-js's commits, and hashes of `requests.json`, of each layout's skills and of each layout's saved lockfile,
-recorded once the lockfile is saved; and each agent's model and
+and serenity-js's commits, and hashes of `requests.json`, of each layout's skills, of each fixture the plan's requests start from, and of each
+layout's saved lockfile, recorded once the lockfile is saved; and each agent's model and
 version, when that agent's first run starts. A resume checks the shared conditions, and the conditions of every agent
 that already has runs, and refuses to go on when any changed, saying which, so the summary never mixes runs from
 different experiments. An agent without runs has no recorded conditions yet, so its pin can still change before its
