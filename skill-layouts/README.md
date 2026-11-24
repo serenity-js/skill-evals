@@ -373,7 +373,7 @@ reports, as Copilot's does, or else what the agent's `--version` printed, as for
 the local API server, `apiServer.port`. The template clone has to
 have that commit; for a pull request that isn't merged yet, `git fetch origin pull/<number>/head` gets it.
 
-### The agents' configuration and credentials
+## The agents' configuration and credentials
 
 Each run gets a `KIRO_HOME` and a `COPILOT_HOME` of its own, created empty in `<work>/homes/<id>/`, so your
 configuration, agents, MCP servers, steering and skills don't reach the runs, and `COPILOT_AUTO_UPDATE=false`, so
@@ -412,7 +412,7 @@ Both agents run every tool without asking, with their shell commands in their OS
 
 Neither sandbox allows `api.mathjs.org` or `api.frankfurter.dev`: the runs only reach the local API server.
 
-### The local API server
+## The local API server
 
 The template's scenarios call the math.js API, and request 4 asks for a scenario that calls the Frankfurter API. In
 the second pilot, `api.mathjs.org` was slow enough that the template's own scenarios hit Mocha's 5 second timeout, so
