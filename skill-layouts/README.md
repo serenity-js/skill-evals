@@ -72,9 +72,10 @@ makes more difference.
 ## What you need
 
 - **macOS.** The harness runs `tsc` and `npm test` on the agents' code under `sandbox-exec`, so they can't write
-  outside the run's directory. Run it from your own terminal: `sandbox-exec` can't start inside another sandbox, such
-  as the one a coding agent runs its shell commands in, so the harness refuses to start the runs there. Elsewhere, the
-  checks run without a sandbox (see [Known issues](#known-issues))
+  outside the run's directory, read your home directory, or reach any host but `localhost`. Run it from your own
+  terminal: `sandbox-exec` can't start inside another sandbox, such as the one a coding agent runs its shell commands
+  in, so the harness refuses to run the checks there. Elsewhere, and inside another sandbox, it only runs them given
+  `--unsandboxed`, and each run's `result.json` then records `checksSandboxed: false`
 - **Node.js 24** and **pnpm**, with `pnpm install` run in the repository's root
 - **[Kiro CLI](https://kiro.dev/docs/cli/)**, as `kiro-cli`, with `KIRO_API_KEY` set, for Kiro's runs
 - **[GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli)**, as `copilot`, with
@@ -262,7 +263,8 @@ Each reference has exactly one marker, and the check refuses one whose value isn
 marker can't make the check pass. The control, request 8, changes the README, and has no expected value, so it's only
 checked to pass. A reference that needs the local API server's URLs, as request 4's does, names them with the
 prompts' placeholders, `{{frankfurter}}` and `{{mathjs}}`, which the check fills in. It runs `tsc` and `npm test` as
-the evaluation does, under `sandbox-exec`, so it refuses to check anything inside another sandbox.
+the evaluation does, under `sandbox-exec`, so it refuses to check anything inside another sandbox, or without
+`sandbox-exec`, unless it's given `--unsandboxed`.
 
 `--pilot` runs the regression check of the skills' content: layouts None and B once each, with requests 5, 6, 9 and
 11, in both agents, 16 runs. Requests 5 and 9 start from typical projects, and 6 and 11 from the one with poor
@@ -313,6 +315,11 @@ as "the agent didn't load the skill", apart from a failure of the harness, such 
 Run the evaluation from your own terminal, not from inside a sandbox: the harness runs `tsc` and `npm test` under
 `sandbox-exec`, which can't start inside another sandbox, so it refuses to start the runs there.
 
+- `--unsandboxed` runs `tsc` and `npm test` without a sandbox where `sandbox-exec` isn't available: on another
+  system than macOS, or inside another sandbox. They then run the agents' code with your user's access to your files
+  and the network, and each run's `result.json` records `checksSandboxed: false`. Where `sandbox-exec` can start, the
+  checks run under it, with or without `--unsandboxed`. It goes with the runs, `--rescore` and `--check-references`
+
 - `--serenity-js` is a compiled clone of `serenity-js/serenity-js`, on the branch with the skills; its `bin/test-skills.ts`
   type-checks the layouts' examples
 - `--template` is a clone of `serenity-js-mocha-template`; by default, the one next to the `serenity-js` clone
@@ -355,7 +362,8 @@ Run the evaluation from your own terminal, not from inside a sandbox: the harnes
   example, were made before `CalculationJobs` moved to `system-under-test/`
 - `--rescore` scores the network failures again, as an evaluation does at the end of its runs, then summarises. It
   reruns `tsc` and `npm test` in the runs' directories in `--work`, so it first checks that `sandbox-exec` can start,
-  and refuses to rescore anything otherwise, leaving every `result.json` as it was. It also refuses when `config.json`
+  and, unless it's given `--unsandboxed`, refuses to rescore anything otherwise, leaving every `result.json` as it was.
+  A rescored run's `checksSandboxed` says whether the rescore's checks ran under `sandbox-exec`. It also refuses when `config.json`
   sets another port for the local API server than `conditions.json` recorded, since the runs' code calls that port,
   and refuses results whose `conditions.json` records no port, which come from before the local server: their runs'
   code calls the public APIs, so a rescore with the local server would still score the public APIs' latency. Inside
@@ -521,10 +529,20 @@ make, and of their errors.
    - **The model** each stream reports has to be the one `config.json` pins: another model stops the evaluation, and
      names both. A stream that reports none is scored, flagged with `modelUnreported` in `result.json`, and counted
      in the summary
-   - **`tsc` and `npm test` run sandboxed and without credentials**: under `sandbox-exec` on macOS, with writes
-     allowed only in the run's directory and `TMPDIR`, and with the same environment as the agents', but no
-     credential. They run the code the agent wrote, so they shouldn't be able to change anything else, or use your
-     tokens. Elsewhere, they run without `sandbox-exec`
+   - **`tsc` and `npm test` run sandboxed and without credentials**: under `sandbox-exec` on macOS, and with the same
+     environment as the agents', but no credential. They run the code the agent wrote, so they shouldn't be able to
+     change anything else, read your files, or use your tokens. Where `sandbox-exec` isn't available, they only run
+     given `--unsandboxed`, and `result.json` records `checksSandboxed: false`. The sandbox:
+     - allows writes only in the run's directory and `TMPDIR`, and to the null and terminal devices
+     - denies reads in `HOME`, apart from the run's directory and `TMPDIR`, when they're in it, npm's cache
+       (`npm_config_cache`, or `~/.npm`), and the Node.js installation the harness runs on, the prefix of
+       `process.execPath`, which is in `HOME` with nvm. A path's metadata can still be read, so a command is still
+       found on a `PATH` with directories in `HOME`, such as `~/.local/bin`, but a file's contents and a directory's
+       listing can't. The `npm` and `npx` on your `PATH` have to be outside `HOME`, or that installation's: a
+       version manager whose shims are in `HOME` outside it, such as Volta, keeps them from starting
+     - denies the network, apart from `localhost` and `127.0.0.1`, for the local API server and any server a
+       scenario starts, and the system's DNS resolver, so that `localhost` resolves. Other hosts' names resolve too,
+       but can't be reached
    - **The local API server not answering is the harness's failure**: when `npm test` fails, the harness probes the
      APIs the run's request needs on the run's local API server, as its `apis` in `requests.json` say: `mathjs` for
      every request, and `frankfurter` for request 4. When one doesn't answer, the server failed, not the run's code,
@@ -724,10 +742,6 @@ These are to be fixed in the next pull requests, each with a failing spec first:
   and keep the timer running until the output closes
 - **A stream whose final line was cut off throws.** The parsers should skip the final line only, when it doesn't
   parse, and record that they did; an unparseable line anywhere else should still stop the scoring
-- **The checks' sandbox only limits writes.** `tsc` and `npm test` can read anything in your home directory, and
-  reach any host. The sandbox should deny reads of `HOME` outside the run's directory and npm's cache, and network
-  access other than to `localhost`. Where `sandbox-exec` isn't available, the harness should refuse to run the checks
-  unless it's given `--unsandboxed`
 - **The agents get your real `HOME`, and Copilot can get `GH_TOKEN`.** Copilot should get `COPILOT_GITHUB_TOKEN`
   only, and both agents a `HOME` in the run's homes
 - **The decision ignores the mix of models under `auto`.** The summary and `compare.md` report each layout's models,
@@ -750,4 +764,5 @@ npx vitest run
 ```
 
 The specs replay recorded event streams, in `spec/fixtures/`, and the diffs of earlier runs, in
-`spec/fixtures/runs/`. One spec runs a command under `sandbox-exec`, and is skipped where it can't start.
+`spec/fixtures/runs/`. The specs that run commands under `sandbox-exec`, in `spec/runs.spec.ts`, are skipped where it
+can't start, such as inside another sandbox. CI runs them on macOS.

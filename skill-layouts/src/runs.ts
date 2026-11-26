@@ -1,8 +1,8 @@
 // One run: a copy of the layout's project, the agent working on one request in it, and the scoring of what it did.
 import { execFileSync, spawn } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 
@@ -217,28 +217,62 @@ export function agentEnvironment(agent: Agent, homes: AgentHomes, env: NodeJS.Pr
 }
 
 /**
- * A macOS sandbox profile that allows everything but writing outside `writable`, and the null and terminal devices.
- * Seatbelt matches real paths, so the directories have to be resolved, e.g. /private/var rather than /var.
+ * What the harness's checks may touch: they write only in `writable`, the run's directory and TMPDIR, and read nothing
+ * in `home` outside `writable` and `readable`, npm's cache and the Node.js installation.
  */
-export function sandboxProfile(writable: string[]): string {
-    for (const directory of writable) {
-        if (/["\\()\n]/.test(directory)) {
-            throw new Error(`${ directory } can't be put in a sandbox profile`);
+export interface SandboxPaths {
+    writable: string[];
+    readable: string[];
+    home: string;
+}
+
+// Seatbelt matches real paths, e.g. /private/var rather than /var, so the paths that exist are resolved
+const realPathOf = (path: string) => existsSync(path) ? realpathSync(path) : resolve(path);
+
+/**
+ * The paths of the checks in `directory`, with the environment they run with: npm's cache is npm_config_cache, or
+ * ~/.npm, and Node.js is installed in the prefix of `execPath`, which may be in HOME, as with nvm.
+ */
+export function sandboxPathsOf(env: NodeJS.ProcessEnv, directory: string, execPath: string = process.execPath): SandboxPaths {
+    const home = realPathOf(env.HOME ?? homedir());
+    return {
+        writable: [ realPathOf(directory), realPathOf(env.TMPDIR ?? tmpdir()) ],
+        readable: [ realPathOf(env.npm_config_cache ?? join(home, '.npm')), realPathOf(dirname(dirname(execPath))) ],
+        home,
+    };
+}
+
+/**
+ * A macOS sandbox profile that allows everything but: writing outside `writable`, and the null and terminal devices;
+ * reading in `home` outside `writable` and `readable`, though a path's metadata can be read, so that a command looked
+ * up on a PATH with directories in HOME is still found; and the network, apart from localhost, and the system's DNS
+ * resolver, so that `localhost` resolves.
+ */
+export function sandboxProfile({ writable, readable, home }: SandboxPaths): string {
+    for (const path of [ ...writable, ...readable, home ]) {
+        if (/["\\()\n]/.test(path)) {
+            throw new Error(`${ path } can't be put in a sandbox profile`);
         }
     }
+    const subpaths = (paths: string[]) => paths.map(path => `(subpath "${ path }")`).join(' ');
     return [
         '(version 1)',
         '(allow default)',
         '(deny file-write*)',
-        `(allow file-write* ${ writable.map(directory => `(subpath "${ directory }")`).join(' ') } (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
+        `(allow file-write* ${ subpaths(writable) } (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
+        `(deny file-read* ${ subpaths([ home ]) })`,
+        `(allow file-read-metadata ${ subpaths([ home ]) })`,
+        `(allow file-read* ${ subpaths([ ...writable, ...readable ]) })`,
+        '(deny network*)',
+        '(allow network-outbound (remote ip "localhost:*"))',
+        '(allow network-bind network-inbound (local ip "localhost:*"))',
+        '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
     ].join('\n');
 }
 
-/** The harness's command, under sandbox-exec on macOS, so it can only write in the run's directory and TMPDIR. */
-export function sandboxed(command: string, args: string[], { directory, tmpdir, platform }: { directory: string, tmpdir: string, platform: NodeJS.Platform }): { command: string, args: string[] } {
-    return platform === 'darwin'
-        ? { command: '/usr/bin/sandbox-exec', args: [ '-p', sandboxProfile([ directory, tmpdir ]), command, ...args ] }
-        : { command, args };
+/** The harness's command, under sandbox-exec, with the profile of the run's paths. */
+export function sandboxed(command: string, args: string[], paths: SandboxPaths): { command: string, args: string[] } {
+    return { command: '/usr/bin/sandbox-exec', args: [ '-p', sandboxProfile(paths), command, ...args ] };
 }
 
 /**
@@ -258,10 +292,16 @@ export function preflightProblems(
     ];
 }
 
-/** Whether the harness can sandbox its commands here: sandbox-exec can't start inside another sandbox. */
-export function sandboxProblems(platform: NodeJS.Platform, start: () => unknown = () => execFileSync('/usr/bin/sandbox-exec', [ '-p', sandboxProfile([ realpathSync(tmpdir()) ]), '/usr/bin/true' ], { stdio: 'pipe' })): string[] {
+// with the profile the checks get, so a profile sandbox-exec can't apply refuses the runs before they start
+const startSandboxExec = () => execFileSync('/usr/bin/sandbox-exec', [ '-p', sandboxProfile(sandboxPathsOf(process.env, tmpdir())), '/usr/bin/true' ], { stdio: 'pipe' });
+
+/**
+ * Whether the harness can sandbox its checks here: sandbox-exec is macOS's, and can't start inside another sandbox.
+ * Without it, the checks only run given --unsandboxed.
+ */
+export function sandboxProblems(platform: NodeJS.Platform, start: () => unknown = startSandboxExec): string[] {
     if (platform !== 'darwin') {
-        return [];
+        return [ `the harness runs tsc and npm test under sandbox-exec, which ${ platform } doesn't have: pass --unsandboxed to run them without a sandbox` ];
     }
     try {
         start();
@@ -269,8 +309,20 @@ export function sandboxProblems(platform: NodeJS.Platform, start: () => unknown 
     }
     catch (error) {
         const { stderr, message } = error as { stderr?: Buffer | string, message: string };
-        return [ `the harness runs tsc and npm test under sandbox-exec, which can't start here (${ String(stderr ?? '').trim() || message }): run the evaluation from your own terminal, outside any sandbox` ];
+        return [ `the harness runs tsc and npm test under sandbox-exec, which can't start here (${ String(stderr ?? '').trim() || message }): run the evaluation from your own terminal, outside any sandbox, or pass --unsandboxed to run them without one` ];
     }
+}
+
+/**
+ * How the harness's checks run: under sandbox-exec where it can start, whether or not it's given --unsandboxed; and,
+ * where it can't, without a sandbox, given --unsandboxed, or not at all, with what refuses them.
+ */
+export function checksSandbox(platform: NodeJS.Platform, { unsandboxed, start = startSandboxExec }: { unsandboxed: boolean, start?: () => unknown }): { problems: string[], checks: { unsandboxed: boolean } } {
+    const problems = sandboxProblems(platform, start);
+    if (problems.length === 0) {
+        return { problems, checks: { unsandboxed: false } };
+    }
+    return unsandboxed ? { problems: [], checks: { unsandboxed: true } } : { problems, checks: { unsandboxed: false } };
 }
 
 /** A pin that takes whichever model the agent picks, for a robustness check, rather than a model of its own. */
@@ -502,7 +554,8 @@ export type RunCommand = (command: string, args: string[], cwd: string, logFile:
 
 export interface CheckOptions {
     env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
+    /** Run without sandbox-exec: only given --unsandboxed, where sandbox-exec isn't available */
+    unsandboxed?: boolean;
 }
 
 /**
@@ -510,14 +563,14 @@ export interface CheckOptions {
  * Throws CommandDidNotStart when the command couldn't start: a spawn error, such as ENOENT or EACCES, or sandbox-exec's
  * refusal. A command its timeout stopped returns a failure, whose log says it timed out.
  */
-export function resultOf(command: string, args: string[], cwd: string, logFile: string, timeoutMinutes: number, { env = process.env, platform = process.platform }: CheckOptions = {}): CommandResult {
-    const temporary = realpathSync(env.TMPDIR ?? tmpdir());
-    const inSandbox = sandboxed(command, args, { directory: realpathSync(cwd), tmpdir: temporary, platform });
-    const isSandboxed = inSandbox.command !== command;
+export function resultOf(command: string, args: string[], cwd: string, logFile: string, timeoutMinutes: number, { env = process.env, unsandboxed = false }: CheckOptions = {}): CommandResult {
+    const environment = testEnvironment(env, cwd);
+    const inSandbox = unsandboxed ? { command, args } : sandboxed(command, args, sandboxPathsOf(environment, cwd));
+    const isSandboxed = ! unsandboxed;
     let result: CommandResult;
     try {
         result = { exitCode: 0, log: execFileSync(inSandbox.command, inSandbox.args, {
-            cwd, env: testEnvironment(env, cwd), encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'pipe' ], timeout: timeoutMinutes * 60_000, maxBuffer: 64 * 1024 * 1024,
+            cwd, env: environment, encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'pipe' ], timeout: timeoutMinutes * 60_000, maxBuffer: 64 * 1024 * 1024,
         }), sandboxed: isSandboxed };
     }
     catch (error) {
@@ -531,7 +584,7 @@ export function resultOf(command: string, args: string[], cwd: string, logFile: 
         if (code !== undefined && SPAWN_ERRORS.has(code)) {
             throw commandDidNotStart(command, message);
         }
-        const refusal = inSandbox.command !== command && status === 71 ? SANDBOX_REFUSAL.exec(stderr)?.[0] : undefined;
+        const refusal = isSandboxed && status === 71 ? SANDBOX_REFUSAL.exec(stderr)?.[0] : undefined;
         if (refusal) {
             throw commandDidNotStart(command, refusal);
         }
@@ -572,7 +625,8 @@ async function runChecks(runId: string, directory: string, results: string, requ
  */
 export async function rescoreNetworkFailures(
     planned: PlannedRun[], requests: Map<string, Request>, results: string, work: string, config: Config,
-    { probe = urls => unreachable(urls), runCommand = resultOf }: { probe?: (urls: string[]) => Promise<string[]>, runCommand?: RunCommand } = {},
+    { probe = urls => unreachable(urls), checks = {}, runCommand = (command, args, cwd, logFile, timeoutMinutes) => resultOf(command, args, cwd, logFile, timeoutMinutes, checks) }:
+        { probe?: (urls: string[]) => Promise<string[]>, checks?: CheckOptions, runCommand?: RunCommand } = {},
 ): Promise<{ rescored: number, remaining: number, missing: string[] }> {
     const counts = { rescored: 0, remaining: 0, missing: [] as string[] };
     for (const run of planned) {
@@ -611,6 +665,8 @@ export async function rescoreNetworkFailures(
             tsc: { exitCode: rescored.tsc.exitCode },
             test: { exitCode: rescored.test.exitCode },
             testAttempts: record.testAttempts + rescored.attempts,
+            // the rescore's checks, given --unsandboxed, may not have run under sandbox-exec, as the run's did
+            checksSandboxed: rescored.tsc.sandboxed === true && rescored.test.sandboxed === true,
             unreachable: rescored.unreachable,
             rescored: { at: new Date().toISOString(), outcome: rescored.outcome },
         }, null, 2) }\n`);

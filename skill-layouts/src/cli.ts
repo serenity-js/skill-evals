@@ -1,7 +1,7 @@
 // pnpm run eval:skill-layouts -- [--pilot [--layouts <list>] [--requests <list>] [--repeats <n>] | --smoke | --held-back <layout>]
 //                                  [--agent <kiro|copilot>] [--prepare-only | --summarise | --compare | --rescore | --reparse | --rescore-checks]
-//                                  --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>]
-// pnpm run eval:skill-layouts -- --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>]
+//                                  --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]
+// pnpm run eval:skill-layouts -- --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]
 //
 // Evaluates how a package's skills should be laid out: packs the Serenity/JS packages, gives them each layout's
 // skills, installs them into copies of the Mocha template, runs Kiro and GitHub Copilot on each request, and scores the
@@ -22,7 +22,7 @@ import { checkReference, type ReferenceCheck, renderReferenceCheck } from './ref
 import { loadRequests, type Request } from './requests.ts';
 import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, type RunKey, scoresTemplate } from './review.ts';
 import { renderSmoke, SMOKE_REQUEST, smokeChecks, smokeProblem } from './smoke.ts';
-import { checksOf, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, runsFor, sandboxProblems, scoreRun, startRun, writeReviewPacket } from './runs.ts';
+import { type CheckOptions, checksOf, checksSandbox, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, resultOf, runsFor, sandboxProblems, scoreRun, startRun, writeReviewPacket } from './runs.ts';
 import { decideWhenComplete, renderSummary, type RunResult, summarise } from './summary.ts';
 
 export interface Arguments {
@@ -48,17 +48,19 @@ export interface Arguments {
     agent: Agent | undefined;
     /** Only check that every request's reference solution passes, and fails with its expected value made wrong */
     checkReferencesOnly: boolean;
+    /** Run tsc and npm test without a sandbox where sandbox-exec isn't available, rather than refuse to */
+    unsandboxed: boolean;
 }
 
-const USAGE = 'usage: eval:skill-layouts [--pilot [--layouts <list>] [--requests <list>] [--repeats <n>] | --smoke | --held-back <layout>] [--agent <kiro|copilot>] [--prepare-only | --summarise | --compare | --rescore | --reparse | --rescore-checks] --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>]\n'
-    + '       eval:skill-layouts --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>]';
+const USAGE = 'usage: eval:skill-layouts [--pilot [--layouts <list>] [--requests <list>] [--repeats <n>] | --smoke | --held-back <layout>] [--agent <kiro|copilot>] [--prepare-only | --summarise | --compare | --rescore | --reparse | --rescore-checks] --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]\n'
+    + '       eval:skill-layouts --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]';
 
 export function parseArguments(argv: string[], cwd: string): Arguments {
     const options = new Map<string, string>();
     const flags = new Set<string>();
     for (let index = 0; index < argv.length; index++) {
         const argument = argv[index];
-        if ([ '--pilot', '--smoke', '--prepare-only', '--summarise', '--rescore', '--reparse', '--rescore-checks', '--check-references', '--compare' ].includes(argument)) {
+        if ([ '--pilot', '--smoke', '--prepare-only', '--summarise', '--rescore', '--reparse', '--rescore-checks', '--check-references', '--compare', '--unsandboxed' ].includes(argument)) {
             flags.add(argument);
         }
         else if ([ '--serenity-js', '--template', '--out', '--work', '--held-back', '--agent', '--layouts', '--requests', '--repeats' ].includes(argument) && argv[index + 1] && ! argv[index + 1].startsWith('--')) {
@@ -121,7 +123,7 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
     }
     // it runs no agent, so it takes no mode, agent or other action
     const checkReferencesOnly = flags.has('--check-references');
-    if (checkReferencesOnly && (flags.size > 1 || heldBack !== undefined || agent !== undefined)) {
+    if (checkReferencesOnly && ([ ...flags ].filter(flag => flag !== '--unsandboxed').length > 1 || heldBack !== undefined || agent !== undefined)) {
         throw new Error(USAGE);
     }
     const serenityJs = options.get('--serenity-js');
@@ -148,6 +150,7 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
         rescoreChecksOnly,
         agent: agent as Agent | undefined,
         checkReferencesOnly,
+        unsandboxed: flags.has('--unsandboxed'),
     };
 }
 
@@ -229,9 +232,10 @@ async function evaluate(args: Arguments): Promise<void> {
     // the plan is the mode's, whichever agents run, so a pilot always has the same run IDs
     const agents = agentsToRun(keys, args.agent);
     const layouts = [ ...new Set(keys.map(run => run.layout)) ];
+    const sandbox = checksSandbox(process.platform, { unsandboxed: args.unsandboxed });
 
     if (! args.prepareOnly) {
-        const problems = preflightProblems(agents, config, process.env, { home: homedir(), sandboxProblems: () => sandboxProblems(process.platform) });
+        const problems = preflightProblems(agents, config, process.env, { home: homedir(), sandboxProblems: () => sandbox.problems });
         if (problems.length > 0) {
             throw new Error(problems.join('\n'));
         }
@@ -297,13 +301,13 @@ async function evaluate(args: Arguments): Promise<void> {
             // Kiro's stream reports no version, so the run records the one kiro-cli --version printed
             const performed = { ...await performRun(run, request, directory, runResults, args.work, config, server), agentVersion: versions.get(run.agent) };
             if (args.mode.mode !== 'smoke') {
-                await scoreRun(run, request, directory, runResults, performed, config, server);
+                await scoreRun(run, request, directory, runResults, performed, config, server, sandbox.checks);
                 writeReviewPacket(run, request, runResults, review);
                 return;
             }
             // the smoke run reports what stopped its scoring, rather than stopping
             try {
-                await scoreRun(run, request, directory, runResults, performed, config, server);
+                await scoreRun(run, request, directory, runResults, performed, config, server, sandbox.checks);
                 writeReviewPacket(run, request, runResults, review);
             }
             catch (error) {
@@ -323,7 +327,7 @@ async function evaluate(args: Arguments): Promise<void> {
     if (! existsSync(scores)) {
         writeFileSync(scores, `${ JSON.stringify(scoresTemplate(planned), null, 2) }\n`);
     }
-    await rescoreResults(results, args.work, { agents });
+    await rescoreResults(results, args.work, { agents, checks: sandbox.checks });
     summariseResults(results, { agent: args.agent });
 }
 
@@ -465,13 +469,14 @@ export function writeFixtures(results: string, fixtures: object): void {
 
 /**
  * Scores the network failures again, where their run directories are still in `work`. It reruns the harness's checks,
- * so it refuses to rescore anything where they can't run sandboxed, as inside another sandbox, and leaves every
- * result.json as it was: checks that can't start would turn each network failure into a false failure.
+ * so it refuses to rescore anything where they can't run sandboxed, as inside another sandbox, unless `checks` says
+ * they run without, and leaves every result.json as it was: checks that can't start would turn each network failure
+ * into a false failure.
  */
 export async function rescoreResults(
     results: string, work: string,
-    { sandboxProblems: problems = () => sandboxProblems(process.platform), config = loadConfig(), agents = AGENTS }:
-        { sandboxProblems?: () => string[], config?: Config, agents?: readonly Agent[] } = {},
+    { sandboxProblems: problems = () => sandboxProblems(process.platform), checks = {}, config = loadConfig(), agents = AGENTS }:
+        { sandboxProblems?: () => string[], checks?: CheckOptions, config?: Config, agents?: readonly Agent[] } = {},
 ): Promise<void> {
     const refusals = problems();
     if (refusals.length > 0) {
@@ -489,7 +494,7 @@ export async function rescoreResults(
         throw new Error(`nothing rescored: the runs were made with the local API server on port ${ made.port }, but config.json sets ${ config.apiServer.port }, so the URLs in their code wouldn't answer: put the port back`);
     }
     const planned = readPlan(results, agents);
-    const { rescored, remaining, missing } = await rescoreNetworkFailures(planned, requestsById(), results, work, config);
+    const { rescored, remaining, missing } = await rescoreNetworkFailures(planned, requestsById(), results, work, config, { checks });
     log(`${ rescored } network failure(s) scored again; ${ remaining } not rescored${ missing.length > 0 ? `, ${ missing.length } of them without a run directory in ${ work }` : '' }`);
 }
 
@@ -546,13 +551,14 @@ export function summariseResults(results: string, { agent }: { agent?: Agent } =
  * Checks every request's reference solution, held back or not, in layout None's project, with a local API server of
  * its own: each passes tsc and npm test, and fails npm test with its expected value made wrong. Prints one line per
  * request, and fails, naming them, when any reference failed. It runs tsc and npm test as the evaluation's checks run,
- * under sandbox-exec, so it refuses to check anything where sandbox-exec can't start.
+ * under sandbox-exec, so it refuses to check anything where sandbox-exec can't start, unless it's given --unsandboxed.
  */
 export async function checkReferences(
     args: Arguments,
-    { sandboxProblems: problems = () => sandboxProblems(process.platform), config = loadConfig() }: { sandboxProblems?: () => string[], config?: Config } = {},
+    { sandboxProblems: problems, config = loadConfig() }: { sandboxProblems?: () => string[], config?: Config } = {},
 ): Promise<void> {
-    const refusals = problems();
+    const sandbox = checksSandbox(process.platform, { unsandboxed: args.unsandboxed });
+    const refusals = problems ? problems() : sandbox.problems;
     if (refusals.length > 0) {
         throw new Error(`nothing checked: ${ refusals.join('; ') }`);
     }
@@ -570,7 +576,10 @@ export async function checkReferences(
     const checks: ReferenceCheck[] = [];
     for (const request of [ ...requests, ...heldBack ]) {
         const check = await withApiServer(join(results, request.id, 'server.jsonl'), config.apiServer.port, server =>
-            checkReference(request, { project, work: args.work, results, urls: server.urls, testTimeoutMinutes: config.testTimeoutMinutes }));
+            checkReference(request, {
+                project, work: args.work, results, urls: server.urls, testTimeoutMinutes: config.testTimeoutMinutes,
+                runCommand: (command, commandArgs, cwd, logFile, timeoutMinutes) => resultOf(command, commandArgs, cwd, logFile, timeoutMinutes, sandbox.checks),
+            }));
         console.log(renderReferenceCheck(check));
         checks.push(check);
     }
@@ -609,7 +618,8 @@ if (import.meta.main) {
             summariseResults(results, { agent: args.agent });
         }
         else if (args.rescoreOnly) {
-            await rescoreResults(join(args.out, modeName(args.mode)), args.work, { agents: args.agent ? [ args.agent ] : AGENTS });
+            const sandbox = checksSandbox(process.platform, { unsandboxed: args.unsandboxed });
+            await rescoreResults(join(args.out, modeName(args.mode)), args.work, { sandboxProblems: () => sandbox.problems, checks: sandbox.checks, agents: args.agent ? [ args.agent ] : AGENTS });
             summariseResults(join(args.out, modeName(args.mode)), { agent: args.agent });
         }
         else {

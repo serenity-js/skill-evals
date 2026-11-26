@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArguments } from '../src/cli.ts';
 import { LAYOUTS } from '../src/layouts.ts';
 import { RUNS_PER_LAYOUT_FOR_A_DECISION } from '../src/summary.ts';
-import { agentCommand, agentEnvironment, agentsToRun, environmentNames, loadConfig, modelProblem, preflightProblems, runsFor, sandboxed, sandboxProblems, sandboxProfile, spawnWithTimeout, testEnvironment } from '../src/runs.ts';
+import { agentCommand, agentEnvironment, agentsToRun, environmentNames, loadConfig, modelProblem, preflightProblems, checksSandbox, resultOf, runsFor, sandboxed, sandboxPathsOf, sandboxProblems, sandboxProfile, spawnWithTimeout, testEnvironment } from '../src/runs.ts';
 
 describe('loadConfig', () => {
     it('sets one port for the local API server, for the whole evaluation, so every run gets the same prompts and URLs', () => {
@@ -128,7 +128,14 @@ describe('parseArguments', () => {
             rescoreChecksOnly: false,
             agent: undefined,
             checkReferencesOnly: false,
+            unsandboxed: false,
         });
+    });
+
+    it("takes --unsandboxed, for the checks where sandbox-exec isn't available, also with --check-references or --rescore", () => {
+        expect(parseArguments([ '--pilot', '--unsandboxed', '--serenity-js', '/s', ...out ], '/cwd').unsandboxed).toBe(true);
+        expect(parseArguments([ '--check-references', '--unsandboxed', '--serenity-js', '/s', ...out ], '/cwd')).toMatchObject({ checkReferencesOnly: true, unsandboxed: true });
+        expect(parseArguments([ '--rescore', '--unsandboxed', ...out ], '/cwd')).toMatchObject({ rescoreOnly: true, unsandboxed: true });
     });
 
     it('takes the layouts and the requests of a pilot, as lists', () => {
@@ -410,37 +417,67 @@ describe('modelProblem', () => {
 
 describe('sandboxed', () => {
 
-    it("runs the harness's commands under sandbox-exec on macOS, with writes allowed only in the run's directory and TMPDIR", () => {
-        expect(sandboxed('npm', [ 'test' ], { directory: '/work/runs/x', tmpdir: '/var/folders/x/T', platform: 'darwin' })).toEqual({
+    const paths = { writable: [ '/work/runs/x', '/var/folders/x/T' ], readable: [ '/Users/me/.npm', '/Users/me/.nvm/versions/node/v24.15.0' ], home: '/Users/me' };
+
+    it("runs the harness's commands under sandbox-exec, with the profile of the run's paths", () => {
+        expect(sandboxed('npm', [ 'test' ], paths)).toEqual({
             command: '/usr/bin/sandbox-exec',
-            args: [ '-p', sandboxProfile([ '/work/runs/x', '/var/folders/x/T' ]), 'npm', 'test' ],
+            args: [ '-p', sandboxProfile(paths), 'npm', 'test' ],
         });
     });
 
-    it('allows reads and the network, but writes only under the given directories, and to the null and terminal devices', () => {
-        const profile = sandboxProfile([ '/work/runs/x', '/var/folders/x/T' ]);
-
-        expect(profile).toContain('(allow default)');
-        expect(profile).toContain('(deny file-write*)');
-        expect(profile).toContain('(allow file-write* (subpath "/work/runs/x") (subpath "/var/folders/x/T") (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))');
+    it("writes only in the run's directory and TMPDIR, reads nothing in HOME outside them, npm's cache and Node.js, and reaches only localhost", () => {
+        expect(sandboxProfile(paths)).toBe([
+            '(version 1)',
+            '(allow default)',
+            '(deny file-write*)',
+            '(allow file-write* (subpath "/work/runs/x") (subpath "/var/folders/x/T") (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))',
+            '(deny file-read* (subpath "/Users/me"))',
+            '(allow file-read-metadata (subpath "/Users/me"))',
+            '(allow file-read* (subpath "/work/runs/x") (subpath "/var/folders/x/T") (subpath "/Users/me/.npm") (subpath "/Users/me/.nvm/versions/node/v24.15.0"))',
+            '(deny network*)',
+            '(allow network-outbound (remote ip "localhost:*"))',
+            '(allow network-bind network-inbound (local ip "localhost:*"))',
+            '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
+        ].join('\n'));
     });
 
-    it('refuses a directory whose name would break out of the profile', () => {
-        expect(() => sandboxProfile([ '/work/runs/x") (subpath "/' ])).toThrow(/can't be put in a sandbox profile/);
+    it('refuses a path whose name would break out of the profile', () => {
+        expect(() => sandboxProfile({ ...paths, writable: [ '/work/runs/x") (subpath "/' ] })).toThrow(/can't be put in a sandbox profile/);
+        expect(() => sandboxProfile({ ...paths, readable: [ '/Users/me/.npm")' ] })).toThrow(/can't be put in a sandbox profile/);
+        expect(() => sandboxProfile({ ...paths, home: '/Users/"me' })).toThrow(/can't be put in a sandbox profile/);
     });
 
-    it('runs the commands as they are elsewhere', () => {
-        expect(sandboxed('npm', [ 'test' ], { directory: '/work/runs/x', tmpdir: '/tmp', platform: 'linux' })).toEqual({ command: 'npm', args: [ 'test' ] });
+    it("lets the checks read npm's cache and wherever Node.js is installed, which may be in HOME, as with nvm", () => {
+        const nvm = '/Users/me/.nvm/versions/node/v24.15.0/bin/node';
+
+        expect(sandboxPathsOf({ HOME: '/Users/me', TMPDIR: '/var/folders/x/T/' }, '/work/runs/x', nvm)).toEqual(paths);
+        expect(sandboxPathsOf({ HOME: '/Users/me', TMPDIR: '/var/folders/x/T/', npm_config_cache: '/work/npm-cache' }, '/work/runs/x', nvm).readable)
+            .toEqual([ '/work/npm-cache', '/Users/me/.nvm/versions/node/v24.15.0' ]);
     });
 
-    it("refuses to start the runs when sandbox-exec can't start, as inside another sandbox, rather than failing every run", () => {
+    it("refuses to start the runs when sandbox-exec can't start, as inside another sandbox, unless it's given --unsandboxed", () => {
         const refused = () => { throw new Error('sandbox-exec: sandbox_apply: Operation not permitted'); };
 
         expect(sandboxProblems('darwin', refused)).toEqual([
-            "the harness runs tsc and npm test under sandbox-exec, which can't start here (sandbox-exec: sandbox_apply: Operation not permitted): run the evaluation from your own terminal, outside any sandbox",
+            "the harness runs tsc and npm test under sandbox-exec, which can't start here (sandbox-exec: sandbox_apply: Operation not permitted): run the evaluation from your own terminal, outside any sandbox, or pass --unsandboxed to run them without one",
         ]);
         expect(sandboxProblems('darwin', () => undefined)).toEqual([]);
-        expect(sandboxProblems('linux', refused)).toEqual([]);
+    });
+
+    it("refuses to run the checks where there's no sandbox-exec, unless it's given --unsandboxed", () => {
+        expect(sandboxProblems('linux', () => undefined)).toEqual([
+            'the harness runs tsc and npm test under sandbox-exec, which linux doesn\'t have: pass --unsandboxed to run them without a sandbox',
+        ]);
+    });
+
+    it('runs the checks without a sandbox, given --unsandboxed, only where sandbox-exec is not available', () => {
+        const refused = () => { throw new Error('sandbox-exec: sandbox_apply: Operation not permitted'); };
+
+        expect(checksSandbox('linux', { unsandboxed: true })).toEqual({ problems: [], checks: { unsandboxed: true } });
+        expect(checksSandbox('darwin', { unsandboxed: true, start: refused })).toEqual({ problems: [], checks: { unsandboxed: true } });
+        expect(checksSandbox('darwin', { unsandboxed: true, start: () => undefined })).toEqual({ problems: [], checks: { unsandboxed: false } });
+        expect(checksSandbox('linux', { unsandboxed: false })).toEqual({ problems: sandboxProblems('linux'), checks: { unsandboxed: false } });
     });
 
     const canSandbox = process.platform === 'darwin' && (() => {
@@ -454,19 +491,61 @@ describe('sandboxed', () => {
     })();
 
     // sandbox-exec can't start inside another sandbox, such as the one a coding agent runs its commands in
-    it.runIf(canSandbox)('lets a command write in its directory, but not in the home directory', () => {
-        const directory = realpathSync(mkdtempSync(join(tmpdir(), 'skill-layouts-sandbox-')));
-        const outside = join(homedir(), `.skill-layouts-sandbox-check-${ process.pid }`);
-        try {
-            const { command, args } = sandboxed('/bin/sh', [ '-c', `echo inside > ${ directory }/inside; echo outside > ${ outside } || true` ], { directory, tmpdir: realpathSync(tmpdir()), platform: 'darwin' });
-            execFileSync(command, args, { stdio: 'ignore' });
+    describe.runIf(canSandbox)('under sandbox-exec', () => {
 
-            expect(readFileSync(join(directory, 'inside'), 'utf8')).toBe('inside\n');
-            expect(existsSync(outside)).toBe(false);
-        }
-        finally {
+        let directory: string;
+        const outside = join(homedir(), `.skill-layouts-sandbox-check-${ process.pid }`);
+
+        beforeEach(() => {
+            directory = realpathSync(mkdtempSync(join(tmpdir(), 'skill-layouts-sandbox-')));
+            writeFileSync(join(directory, 'inside'), 'inside\n');
+        });
+        afterEach(() => {
             rmSync(directory, { recursive: true, force: true });
             rmSync(outside, { force: true });
-        }
+        });
+
+        const check = (command: string, args: string[]) => resultOf(command, args, directory, join(directory, 'check.log'), 1);
+
+        it('lets a command write in its directory, but not in the home directory', () => {
+            const { command, args } = sandboxed('/bin/sh', [ '-c', `echo inside > ${ directory }/written; echo outside > ${ outside } || true` ], sandboxPathsOf(process.env, directory));
+            execFileSync(command, args, { stdio: 'ignore' });
+
+            expect(readFileSync(join(directory, 'written'), 'utf8')).toBe('inside\n');
+            expect(existsSync(outside)).toBe(false);
+        });
+
+        it('fails a check that reads a file in HOME outside the run, and lets it read the run\'s own files', () => {
+            writeFileSync(outside, 'secret\n');
+
+            const read = check('/bin/cat', [ outside ]);
+            expect(read).toMatchObject({ sandboxed: true });
+            expect(read.exitCode).not.toBe(0);
+            expect(read.log).toMatch(/Operation not permitted/);
+            expect(check('/bin/cat', [ join(directory, 'inside') ])).toMatchObject({ exitCode: 0, log: 'inside\n' });
+        });
+
+        it('fails a check that reaches a host other than localhost, and lets it reach a server on localhost and 127.0.0.1', () => {
+            const script = [
+                "const server = require('node:http').createServer((request, response) => response.end('ok'));",
+                "server.listen(0, '127.0.0.1', async () => {",
+                '    const { port } = server.address();',
+                '    const reached = url => fetch(url).then(response => response.text(), () => undefined);',
+                "    const local = [ await reached(`http://127.0.0.1:${ port }/`), await reached(`http://localhost:${ port }/`) ];",
+                "    const remote = await reached('https://example.com/');",
+                "    console.log(JSON.stringify({ local, remote: remote !== undefined }));",
+                '    server.close();',
+                '});',
+            ].join('\n');
+
+            const result = check(process.execPath, [ '-e', script ]);
+
+            expect(result.exitCode).toBe(0);
+            expect(JSON.parse(result.log)).toEqual({ local: [ 'ok', 'ok' ], remote: false });
+        });
+
+        it('starts npm, with HOME unreadable', () => {
+            expect(check('npm', [ '--version' ])).toMatchObject({ exitCode: 0, sandboxed: true });
+        });
     });
 });
