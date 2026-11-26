@@ -16,7 +16,7 @@
     "eval:build-layouts": "node skill-layouts/src/build-layouts.ts"
   },
   "devDependencies": {
-    "@ast-grep/napi": "0.51.2",
+    "@ast-grep/napi": "0.51.3",
     "@types/node": "24.19.2",
     "mathjs": "15.2.0",
     "typescript": "7.0.2",
