@@ -12,6 +12,6 @@
     "skipLibCheck": true,
     "types": [ "node" ]
   },
-  "include": [ "*/src/**/*.ts", "*/server/**/*.ts", "*/spec/**/*.ts", "vitest.config.ts" ],
+  "include": [ "*/src/**/*.ts", "*/server/**/*.ts", "*/spec/**/*.ts", "scripts/**/*.ts", "vitest.config.ts" ],
   "exclude": [ "*/spec/fixtures/**", "*/fixtures/**", "*/layouts/**" ]
 }

@@ -778,5 +778,15 @@ npx vitest run
 ```
 
 The specs replay recorded event streams, in `spec/fixtures/`, and the diffs of earlier runs, in
-`spec/fixtures/runs/`. The specs that run commands under `sandbox-exec`, in `spec/runs.spec.ts`, are skipped where it
-can't start, such as inside another sandbox. CI runs them on macOS.
+`spec/fixtures/runs/`. The specs that run commands under `sandbox-exec`, under `sandboxed > under sandbox-exec` in
+`spec/runs.spec.ts`, are skipped where it can't start: on Linux, and inside another sandbox, such as a coding agent's.
+
+CI runs the specs on Linux and on macOS. On macOS, the job fails if any spec is skipped, so the `sandbox-exec` specs
+can't stop running there unnoticed. On Linux, it fails if any spec other than those is skipped. Both read vitest's
+JSON report, with `scripts/check-skipped-specs.ts`:
+
+```bash
+npx vitest run --reporter=default --reporter=json --outputFile.json=vitest.json
+node scripts/check-skipped-specs.ts vitest.json                                              # as on macOS
+node scripts/check-skipped-specs.ts vitest.json --may-skip 'sandboxed > under sandbox-exec'  # as on Linux
+```

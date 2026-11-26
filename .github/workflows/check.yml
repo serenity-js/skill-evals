@@ -14,8 +14,13 @@ concurrency:
 
 jobs:
   test:
-    # the harness runs its checks under macOS's sandbox-exec, and one spec checks that it does
-    runs-on: macos-latest
+    # on both systems, without one's failure cancelling the other: the specs under "sandboxed > under sandbox-exec"
+    # need macOS's sandbox-exec, so only macOS runs them, and Linux runs every other spec
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,4 +40,15 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Test
-        run: npx vitest run
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/vitest.json"
+
+      # from vitest's JSON report, not its console output: on macOS, no spec may be skipped, so the sandbox-exec specs
+      # can't silently stop running there; on Linux, only those may be
+      - name: Check which specs were skipped
+        if: ${{ !cancelled() }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            node scripts/check-skipped-specs.ts "$RUNNER_TEMP/vitest.json"
+          else
+            node scripts/check-skipped-specs.ts "$RUNNER_TEMP/vitest.json" --may-skip 'sandboxed > under sandbox-exec'
+          fi
