@@ -7,6 +7,8 @@ import { ALLOWED_HOSTS, credentialProblems, personalSkillsProblems, prepareAgent
 
 describe('prepareAgentHomes', () => {
 
+    // the ID the harness gives a planned run, which names the run's directory in <work>/homes
+    const runId = '3f9c2a1e';
     let homes: string;
 
     beforeEach(() => {
@@ -15,12 +17,12 @@ describe('prepareAgentHomes', () => {
     afterEach(() => rmSync(homes, { recursive: true, force: true }));
 
     it("gives the run a Kiro home, a Copilot home and a HOME of its own, instead of the user's, and keeps Copilot from updating itself", () => {
-        const env = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const env = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(env).toEqual({
-            HOME: join(homes, '3f9c2a1e', 'home'),
-            KIRO_HOME: join(homes, '3f9c2a1e', 'kiro'),
-            COPILOT_HOME: join(homes, '3f9c2a1e', 'copilot'),
+            HOME: join(homes, runId, 'home'),
+            KIRO_HOME: join(homes, runId, 'kiro'),
+            COPILOT_HOME: join(homes, runId, 'copilot'),
             COPILOT_AUTO_UPDATE: 'false',
             npm_config_cache: join(homes, 'npm-cache'),
         });
@@ -29,17 +31,17 @@ describe('prepareAgentHomes', () => {
     });
 
     it("keeps npm's cache, which every run shares, so each run doesn't download every package again, while each HOME starts empty", () => {
-        const first = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const first = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
         writeFileSync(join(first.npm_config_cache, 'index'), '');
         writeFileSync(join(first.HOME, '.npmrc'), '');
-        const again = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const again = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(readdirSync(again.npm_config_cache)).toEqual([ 'index' ]);
         expect(readdirSync(again.HOME)).toEqual([]);
     });
 
     it("turns on Kiro's sandbox, with the common development services reachable", () => {
-        const { KIRO_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const { KIRO_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(JSON.parse(readFileSync(join(KIRO_HOME, 'settings', 'sandbox.json'), 'utf8'))).toEqual({
             enabled: true,
@@ -48,7 +50,7 @@ describe('prepareAgentHomes', () => {
     });
 
     it("lets Kiro's sandboxed commands reach the local API server, and not the public APIs it stands in for", () => {
-        const { KIRO_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const { KIRO_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(ALLOWED_HOSTS).toEqual([ '127.0.0.1', 'localhost' ]);
         expect(readFileSync(join(KIRO_HOME, 'settings', 'permissions.yaml'), 'utf8')).toBe([
@@ -61,7 +63,7 @@ describe('prepareAgentHomes', () => {
     });
 
     it("turns on Copilot's sandbox, without bypass or the user's credentials, and lets it reach only the local API server and the npm registry", () => {
-        const { COPILOT_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const { COPILOT_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(JSON.parse(readFileSync(join(COPILOT_HOME, 'settings.json'), 'utf8'))).toEqual({
             sandbox: {
@@ -80,9 +82,9 @@ describe('prepareAgentHomes', () => {
     });
 
     it('starts each run from empty homes, whatever an earlier attempt left there', () => {
-        const { COPILOT_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const { COPILOT_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
         mkdirSync(join(COPILOT_HOME, 'skills'));
-        const again = prepareAgentHomes(join(homes, '3f9c2a1e'), join(homes, 'npm-cache'));
+        const again = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(readdirSync(again.COPILOT_HOME)).toEqual([ 'settings.json' ]);
     });
