@@ -764,6 +764,8 @@ These are to be fixed in the next pull requests, each with a failing spec first:
   `Pass`, falls back to the patterns' verdict in `compare.md` without a word
 - **"Too small to decide" counts the failed runs.** The sample it compares with the 33 runs the rule needs should
   leave out the network failures and agent failures, as the correctness rate does
+- **Each run's `HOME` keeps the agents' own installs.** Kiro unpacks about 300 MB into it, and Copilot about 250 MB,
+  and the homes stay in `<work>` after the runs, so a 16-run pilot leaves 4 to 5 GB there
 
 ## Developing the harness
 
