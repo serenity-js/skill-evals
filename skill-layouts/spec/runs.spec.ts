@@ -303,7 +303,10 @@ describe('agentEnvironment', () => {
         KIRO_API_KEY: 'kiro-key', COPILOT_GITHUB_TOKEN: 'github_pat_1', GH_TOKEN: 'gho_1',
         AWS_SECRET_ACCESS_KEY: 'aws-secret', NPM_TOKEN: 'npm-token', CLAUDE_CODE_OAUTH_TOKEN: 'claude-token',
     };
-    const homes = { KIRO_HOME: '/work/homes/x/kiro', COPILOT_HOME: '/work/homes/x/copilot', COPILOT_AUTO_UPDATE: 'false' as const };
+    const homes = {
+        HOME: '/work/homes/x/home', KIRO_HOME: '/work/homes/x/kiro', COPILOT_HOME: '/work/homes/x/copilot', COPILOT_AUTO_UPDATE: 'false' as const,
+        npm_config_cache: '/work/npm-cache',
+    };
     const basics = {
         PATH: '/usr/bin:/bin', HOME: '/home/user', USER: 'user', LANG: 'en_GB.UTF-8', LC_ALL: 'en_GB.UTF-8', LC_CTYPE: 'UTF-8',
         TERM: 'xterm-256color', TMPDIR: '/var/folders/x/T/', SHELL: '/bin/zsh',
@@ -318,15 +321,28 @@ describe('agentEnvironment', () => {
         expect(agentEnvironment('kiro', homes, env, directory)).toEqual({ ...basics, ...homes, ...local, ...results, KIRO_API_KEY: 'kiro-key' });
     });
 
-    it("gives a Copilot run the basics, its homes and one GitHub token, and nothing of Kiro's or anyone else's", () => {
+    it("gives a Copilot run the basics, its homes and COPILOT_GITHUB_TOKEN, and nothing of Kiro's or anyone else's", () => {
         expect(agentEnvironment('copilot', homes, env, directory)).toEqual({ ...basics, ...homes, ...local, ...results, COPILOT_GITHUB_TOKEN: 'github_pat_1' });
-        expect(agentEnvironment('copilot', homes, { ...env, COPILOT_GITHUB_TOKEN: undefined }, directory)).toEqual({ ...basics, ...homes, ...local, ...results, GH_TOKEN: 'gho_1' });
+    });
+
+    it("gives neither agent a HOME outside <work>, or GH_TOKEN, even when COPILOT_GITHUB_TOKEN isn't set", () => {
+        for (const agent of [ 'kiro', 'copilot' ] as const) {
+            for (const user of [ env, { ...env, COPILOT_GITHUB_TOKEN: undefined } ]) {
+                const run = agentEnvironment(agent, homes, user, directory);
+
+                expect(run.HOME).toBe('/work/homes/x/home');
+                expect(run.npm_config_cache).toBe('/work/npm-cache');
+                expect(Object.keys(run)).not.toContain('GH_TOKEN');
+                expect(Object.values(run).filter(value => value.startsWith('/home/user'))).toEqual([]);
+            }
+        }
+        expect(Object.keys(agentEnvironment('copilot', homes, { ...env, COPILOT_GITHUB_TOKEN: undefined }, directory))).not.toContain('COPILOT_GITHUB_TOKEN');
     });
 
     it("records the names of the variables a run's environment holds, without their values", () => {
         const names = environmentNames(agentEnvironment('kiro', homes, env, directory));
 
-        expect(names).toEqual([ 'COPILOT_AUTO_UPDATE', 'COPILOT_HOME', 'HOME', 'JOBS_DIR', 'KIRO_API_KEY', 'KIRO_HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'NO_PROXY', 'PATH', 'RESULTS_DIR', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'no_proxy' ]);
+        expect(names).toEqual([ 'COPILOT_AUTO_UPDATE', 'COPILOT_HOME', 'HOME', 'JOBS_DIR', 'KIRO_API_KEY', 'KIRO_HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'NO_PROXY', 'PATH', 'RESULTS_DIR', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'no_proxy', 'npm_config_cache' ]);
         expect(names.join()).not.toContain('kiro-key');
     });
 
@@ -367,7 +383,7 @@ describe('preflightProblems', () => {
     it("checks Copilot's pin and token when it runs", () => {
         expect(preflightProblems([ 'copilot' ], config, { KIRO_API_KEY: 'key' }, { home: '/nowhere', sandboxProblems: () => [] })).toEqual([
             'pin the model of copilot in skill-layouts/config.json before the runs',
-            'Copilot needs COPILOT_GITHUB_TOKEN, or GH_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME, without your login',
+            'Copilot needs COPILOT_GITHUB_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME and HOME, without your login, and gets no GH_TOKEN',
         ]);
     });
 
