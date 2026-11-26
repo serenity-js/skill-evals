@@ -7,7 +7,7 @@
   "engines": {
     "node": "^24.15.0"
   },
-  "packageManager": "pnpm@12.10.1",
+  "packageManager": "pnpm@12.23.0",
   "scripts": {
     "test": "pnpm run test:types && pnpm run test:unit",
     "test:types": "tsc --noEmit",
