@@ -1,7 +1,8 @@
-// Each run gets a Kiro home and a Copilot home of its own, created empty, so the user's configuration, agents, MCP
-// servers, steering and skills don't reach the runs. Without the user's login, the agents authenticate from the
-// environment: KIRO_API_KEY for Kiro, and COPILOT_GITHUB_TOKEN, or GH_TOKEN, for Copilot. Copilot also reads personal
-// skills from ~/.agents/skills, which COPILOT_HOME doesn't cover, so the runs don't start while it exists.
+// Each run gets a Kiro home, a Copilot home and a HOME of its own, created empty, so the user's configuration, agents,
+// MCP servers, steering, skills and dotfiles, such as ~/.npmrc and gh's login, don't reach the runs. npm's cache is the
+// one thing the runs share, in <work>. Without the user's login, the agents authenticate from the environment:
+// KIRO_API_KEY for Kiro, and COPILOT_GITHUB_TOKEN for Copilot. Copilot also reads personal skills from
+// ~/.agents/skills, which COPILOT_HOME doesn't cover, so the runs don't start while it exists.
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -20,16 +21,31 @@ export const ALLOWED_HOSTS = [ '127.0.0.1', 'localhost' ];
 export const COPILOT_ALLOWED_HOSTS = [ ...ALLOWED_HOSTS, 'registry.npmjs.org' ];
 
 export interface AgentHomes {
+    /**
+     * The run's HOME, instead of the user's. Each run's Kiro unpacks its runtime into Library/Application Support/kiro-cli
+     * there, and Copilot its package into Library/Caches/copilot
+     */
+    HOME: string;
     KIRO_HOME: string;
     COPILOT_HOME: string;
     /** Keeps Copilot from updating itself, or running a newer cached version, in the middle of an evaluation */
     COPILOT_AUTO_UPDATE: 'false';
+    /** npm's cache, which every run shares, so each run doesn't download every package again */
+    npm_config_cache: string;
 }
 
-/** Empty homes for a run, in `directory`, with each agent's sandbox on and the scenarios' APIs reachable from it. */
-export function prepareAgentHomes(directory: string): AgentHomes {
+/**
+ * Empty homes for a run, in `directory`, with each agent's sandbox on and the scenarios' APIs reachable from it, and
+ * npm's cache in `npmCache`, which is kept, since every run shares it.
+ */
+export function prepareAgentHomes(directory: string, npmCache: string): AgentHomes {
     rmSync(directory, { recursive: true, force: true });
-    const homes: AgentHomes = { KIRO_HOME: join(directory, 'kiro'), COPILOT_HOME: join(directory, 'copilot'), COPILOT_AUTO_UPDATE: 'false' };
+    const homes: AgentHomes = {
+        HOME: join(directory, 'home'), KIRO_HOME: join(directory, 'kiro'), COPILOT_HOME: join(directory, 'copilot'),
+        COPILOT_AUTO_UPDATE: 'false', npm_config_cache: npmCache,
+    };
+    mkdirSync(homes.HOME, { recursive: true });
+    mkdirSync(homes.npm_config_cache, { recursive: true });
     mkdirSync(join(homes.KIRO_HOME, 'settings'), { recursive: true });
     mkdirSync(homes.COPILOT_HOME, { recursive: true });
 
@@ -61,8 +77,9 @@ export function credentialProblems(agents: Agent[], env: NodeJS.ProcessEnv): str
     return [
         ...(agents.includes('kiro') && ! env.KIRO_API_KEY
             ? [ 'Kiro needs KIRO_API_KEY: each run has its own KIRO_HOME, without your login' ] : []),
-        ...(agents.includes('copilot') && ! env.COPILOT_GITHUB_TOKEN && ! env.GH_TOKEN
-            ? [ 'Copilot needs COPILOT_GITHUB_TOKEN, or GH_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME, without your login' ] : []),
+        // GH_TOKEN would reach gh in the agent's shell commands too, so the runs don't pass it on
+        ...(agents.includes('copilot') && ! env.COPILOT_GITHUB_TOKEN
+            ? [ 'Copilot needs COPILOT_GITHUB_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME and HOME, without your login, and gets no GH_TOKEN' ] : []),
     ];
 }
 

@@ -79,7 +79,8 @@ makes more difference.
 - **Node.js 24** and **pnpm**, with `pnpm install` run in the repository's root
 - **[Kiro CLI](https://kiro.dev/docs/cli/)**, as `kiro-cli`, with `KIRO_API_KEY` set, for Kiro's runs
 - **[GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli)**, as `copilot`, with
-  `COPILOT_GITHUB_TOKEN` set to a token that can use Copilot, for Copilot's runs. `--agent kiro` runs without it
+  `COPILOT_GITHUB_TOKEN` set to a token that can use Copilot, for Copilot's runs. `GH_TOKEN` doesn't do instead: the
+  runs don't get it. `--agent kiro` runs without it
 - **A compiled clone of [serenity-js](https://github.com/serenity-js/serenity-js)**, on the branch with the skills
   you're checking. `eval:build-layouts` builds the layouts' core skills from it, the harness packs its packages,
   and its `bin/test-skills.ts` type-checks the skills' examples
@@ -389,22 +390,34 @@ have that commit; for a pull request that isn't merged yet, `git fetch origin pu
 
 ## The agents' configuration and credentials
 
-Each run gets a `KIRO_HOME` and a `COPILOT_HOME` of its own, created empty in `<work>/homes/<id>/`, so your
-configuration, agents, MCP servers, steering and skills don't reach the runs, and `COPILOT_AUTO_UPDATE=false`, so
-Copilot doesn't update itself in the middle of an evaluation. Without your login, the agents authenticate from the
-environment:
+Each run gets a `KIRO_HOME`, a `COPILOT_HOME` and a `HOME` of its own, created empty in `<work>/homes/<id>/`, so your
+configuration, agents, MCP servers, steering, skills and dotfiles, such as `~/.npmrc`, `~/.gitconfig` and `gh`'s
+login, don't reach the runs, and `COPILOT_AUTO_UPDATE=false`, so Copilot doesn't update itself in the middle of an
+evaluation. Without your login, the agents authenticate from the environment:
 
 - **Kiro** needs `KIRO_API_KEY`, as for any headless run
-- **Copilot** needs `COPILOT_GITHUB_TOKEN`, or `GH_TOKEN`, with a token that can use Copilot
+- **Copilot** needs `COPILOT_GITHUB_TOKEN`, with a token that can use Copilot. The runs don't get `GH_TOKEN`, even
+  when it's set: `gh`, in the agent's shell commands, would use it too
 
 The harness refuses to start the runs without them, and while `~/.agents/skills` exists: Copilot reads personal
 skills from there, whatever `COPILOT_HOME` says. Move it aside for the evaluation.
 
-Neither agent gets your environment. Each run's environment has only `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TERM`,
-`TMPDIR` and `SHELL`, the run's homes, `COPILOT_AUTO_UPDATE`, `NO_PROXY` and `no_proxy`, set to `127.0.0.1,localhost`
-so the local API server is reached directly, `JOBS_DIR` and `RESULTS_DIR`, and that agent's credential: `KIRO_API_KEY` for Kiro,
-and `COPILOT_GITHUB_TOKEN`, or else `GH_TOKEN`, for Copilot. So Kiro doesn't see Copilot's token, Copilot doesn't see
-Kiro's key, and neither sees anything else you've exported, such as cloud credentials.
+Each agent writes to its run's `HOME` as it starts: Kiro unpacks its runtime into
+`Library/Application Support/kiro-cli/`, about 300 MB, and Copilot its package into `Library/Caches/copilot/`, about
+250 MB, with device IDs in `Library/Application Support/Microsoft/` and `.local/state/gh/`. The homes stay in `<work>`
+after the runs, so a pilot's take a few GB. npm writes nothing there: `npm_config_cache` points it at `<work>/npm-cache/`,
+which every run shares, so each run doesn't download every package again. npm keeps its logs there too, in `_logs/`.
+
+The harness's own `tsc` and `npm test` don't get the run's homes or the shared cache: they run with your `HOME` and
+npm's default cache, `~/.npm`, under a sandbox that can't read anything in `HOME` but `~/.npm`, the Node.js
+installation and the run's directory, or reach any host but `localhost` (see [What it does](#what-it-does)).
+
+Neither agent gets your environment. Each run's environment has only `PATH`, `USER`, `LANG`, `LC_*`, `TERM`, `TMPDIR`
+and `SHELL`, the run's `HOME` and other homes, `COPILOT_AUTO_UPDATE`, `npm_config_cache`, `NO_PROXY` and `no_proxy`,
+set to `127.0.0.1,localhost` so the local API server is reached directly, `JOBS_DIR` and `RESULTS_DIR`, and that
+agent's credential: `KIRO_API_KEY` for Kiro, and `COPILOT_GITHUB_TOKEN` for Copilot. So Kiro doesn't see Copilot's
+token, Copilot doesn't see Kiro's key, and neither sees `GH_TOKEN` or anything else you've exported, such as cloud
+credentials.
 
 `JOBS_DIR` and `RESULTS_DIR` are `jobs/` and `job-results/` in the run's directory, where request 9's calculation jobs
 pick up job files and write their results. Every run gets them, and so do the harness's `tsc` and `npm test`, so every
@@ -529,13 +542,14 @@ make, and of their errors.
    - **The model** each stream reports has to be the one `config.json` pins: another model stops the evaluation, and
      names both. A stream that reports none is scored, flagged with `modelUnreported` in `result.json`, and counted
      in the summary
-   - **`tsc` and `npm test` run sandboxed and without credentials**: under `sandbox-exec` on macOS, and with the same
-     environment as the agents', but no credential. They run the code the agent wrote, so they shouldn't be able to
+   - **`tsc` and `npm test` run sandboxed and without credentials**: under `sandbox-exec` on macOS, with the agents'
+     `PATH`, `USER`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `SHELL`, `NO_PROXY`, `JOBS_DIR` and `RESULTS_DIR`, but none of
+     the run's homes: their `HOME` is yours, and npm's cache its default, `~/.npm`. They run the code the agent wrote, so they shouldn't be able to
      change anything else, read your files, or use your tokens. Where `sandbox-exec` isn't available, they only run
      given `--unsandboxed`, and `result.json` records `checksSandboxed: false`. The sandbox:
      - allows writes only in the run's directory and `TMPDIR`, and to the null and terminal devices
-     - denies reads in `HOME`, apart from the run's directory and `TMPDIR`, when they're in it, npm's cache
-       (`npm_config_cache`, or `~/.npm`), and the Node.js installation the harness runs on, the prefix of
+     - denies reads in `HOME`, apart from the run's directory and `TMPDIR`, when they're in it, the checks' npm
+       cache, `~/.npm`, and the Node.js installation the harness runs on, the prefix of
        `process.execPath`, which is in `HOME` with nvm. A path's metadata can still be read, so a command is still
        found on a `PATH` with directories in `HOME`, such as `~/.local/bin`, but a file's contents and a directory's
        listing can't. The `npm` and `npx` on your `PATH` have to be outside `HOME`, or that installation's: a
@@ -742,8 +756,6 @@ These are to be fixed in the next pull requests, each with a failing spec first:
   and keep the timer running until the output closes
 - **A stream whose final line was cut off throws.** The parsers should skip the final line only, when it doesn't
   parse, and record that they did; an unparseable line anywhere else should still stop the scoring
-- **The agents get your real `HOME`, and Copilot can get `GH_TOKEN`.** Copilot should get `COPILOT_GITHUB_TOKEN`
-  only, and both agents a `HOME` in the run's homes
 - **The decision ignores the mix of models under `auto`.** The summary and `compare.md` report each layout's models,
   but the decision rule compares layouts whose runs may have used different ones
 - **Kiro's parser keeps only the last model the stream reports,** and its `modelAnswered` means the session started,

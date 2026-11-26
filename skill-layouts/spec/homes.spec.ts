@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,8 @@ import { ALLOWED_HOSTS, credentialProblems, personalSkillsProblems, prepareAgent
 
 describe('prepareAgentHomes', () => {
 
+    // the ID the harness gives a planned run, which names the run's directory in <work>/homes
+    const runId = '3f9c2a1e';
     let homes: string;
 
     beforeEach(() => {
@@ -14,19 +16,32 @@ describe('prepareAgentHomes', () => {
     });
     afterEach(() => rmSync(homes, { recursive: true, force: true }));
 
-    it("gives the run a Kiro home and a Copilot home of its own, instead of the user's, and keeps Copilot from updating itself", () => {
-        const env = prepareAgentHomes(join(homes, '3f9c2a1e'));
+    it("gives the run a Kiro home, a Copilot home and a HOME of its own, instead of the user's, and keeps Copilot from updating itself", () => {
+        const env = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(env).toEqual({
-            KIRO_HOME: join(homes, '3f9c2a1e', 'kiro'),
-            COPILOT_HOME: join(homes, '3f9c2a1e', 'copilot'),
+            HOME: join(homes, runId, 'home'),
+            KIRO_HOME: join(homes, runId, 'kiro'),
+            COPILOT_HOME: join(homes, runId, 'copilot'),
             COPILOT_AUTO_UPDATE: 'false',
+            npm_config_cache: join(homes, 'npm-cache'),
         });
         expect(readdirSync(env.COPILOT_HOME)).toEqual([ 'settings.json' ]);
+        expect(readdirSync(env.HOME)).toEqual([]);
+    });
+
+    it("keeps npm's cache, which every run shares, so each run doesn't download every package again, while each HOME starts empty", () => {
+        const first = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
+        writeFileSync(join(first.npm_config_cache, 'index'), '');
+        writeFileSync(join(first.HOME, '.npmrc'), '');
+        const again = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
+
+        expect(readdirSync(again.npm_config_cache)).toEqual([ 'index' ]);
+        expect(readdirSync(again.HOME)).toEqual([]);
     });
 
     it("turns on Kiro's sandbox, with the common development services reachable", () => {
-        const { KIRO_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'));
+        const { KIRO_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(JSON.parse(readFileSync(join(KIRO_HOME, 'settings', 'sandbox.json'), 'utf8'))).toEqual({
             enabled: true,
@@ -35,7 +50,7 @@ describe('prepareAgentHomes', () => {
     });
 
     it("lets Kiro's sandboxed commands reach the local API server, and not the public APIs it stands in for", () => {
-        const { KIRO_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'));
+        const { KIRO_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(ALLOWED_HOSTS).toEqual([ '127.0.0.1', 'localhost' ]);
         expect(readFileSync(join(KIRO_HOME, 'settings', 'permissions.yaml'), 'utf8')).toBe([
@@ -48,7 +63,7 @@ describe('prepareAgentHomes', () => {
     });
 
     it("turns on Copilot's sandbox, without bypass or the user's credentials, and lets it reach only the local API server and the npm registry", () => {
-        const { COPILOT_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'));
+        const { COPILOT_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(JSON.parse(readFileSync(join(COPILOT_HOME, 'settings.json'), 'utf8'))).toEqual({
             sandbox: {
@@ -67,9 +82,9 @@ describe('prepareAgentHomes', () => {
     });
 
     it('starts each run from empty homes, whatever an earlier attempt left there', () => {
-        const { COPILOT_HOME } = prepareAgentHomes(join(homes, '3f9c2a1e'));
+        const { COPILOT_HOME } = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
         mkdirSync(join(COPILOT_HOME, 'skills'));
-        const again = prepareAgentHomes(join(homes, '3f9c2a1e'));
+        const again = prepareAgentHomes(join(homes, runId), join(homes, 'npm-cache'));
 
         expect(readdirSync(again.COPILOT_HOME)).toEqual([ 'settings.json' ]);
     });
@@ -84,12 +99,12 @@ describe('credentialProblems', () => {
         expect(credentialProblems([ 'kiro' ], { KIRO_API_KEY: 'key' })).toEqual([]);
     });
 
-    it('needs COPILOT_GITHUB_TOKEN, or GH_TOKEN, for Copilot', () => {
-        expect(credentialProblems([ 'copilot' ], {})).toEqual([
-            'Copilot needs COPILOT_GITHUB_TOKEN, or GH_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME, without your login',
-        ]);
+    it("needs COPILOT_GITHUB_TOKEN for Copilot, and refuses GH_TOKEN alone, which the runs don't pass on", () => {
+        const problem = 'Copilot needs COPILOT_GITHUB_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME and HOME, without your login, and gets no GH_TOKEN';
+
+        expect(credentialProblems([ 'copilot' ], {})).toEqual([ problem ]);
+        expect(credentialProblems([ 'copilot' ], { GH_TOKEN: 'gho_1' })).toEqual([ problem ]);
         expect(credentialProblems([ 'copilot' ], { COPILOT_GITHUB_TOKEN: 'github_pat_1' })).toEqual([]);
-        expect(credentialProblems([ 'copilot' ], { GH_TOKEN: 'gho_1' })).toEqual([]);
     });
 
     it('only checks the agents the runs use', () => {

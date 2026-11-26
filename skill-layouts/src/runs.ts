@@ -201,18 +201,22 @@ export function emptyJobDirectories(directory: string): void {
     }
 }
 
+/** npm's cache, in <work>, which every agent's run shares */
+export const NPM_CACHE = 'npm-cache';
+
 /** The local API server is reached directly, never through a proxy the environment, or a sandbox, may name. */
 const NO_PROXY = { NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
 
 /**
- * The environment of an agent's run in `directory`: the basics, the run's homes, JOBS_DIR and RESULTS_DIR, and only that agent's
- * credential, so neither agent sees the other's, or anything else the user's environment holds, such as cloud
- * credentials.
+ * The environment of an agent's run in `directory`: the basics, with the run's HOME instead of the user's, the run's
+ * other homes and npm's shared cache, JOBS_DIR and RESULTS_DIR, and only that agent's credential: KIRO_API_KEY for
+ * Kiro, COPILOT_GITHUB_TOKEN for Copilot. So neither agent sees the other's, or GH_TOKEN, or anything else the user's
+ * environment holds, such as cloud credentials.
  */
 export function agentEnvironment(agent: Agent, homes: AgentHomes, env: NodeJS.ProcessEnv, directory: string): Record<string, string> {
     const credential: Record<string, string> = agent === 'kiro'
         ? (env.KIRO_API_KEY ? { KIRO_API_KEY: env.KIRO_API_KEY } : {})
-        : (env.COPILOT_GITHUB_TOKEN ? { COPILOT_GITHUB_TOKEN: env.COPILOT_GITHUB_TOKEN } : (env.GH_TOKEN ? { GH_TOKEN: env.GH_TOKEN } : {}));
+        : (env.COPILOT_GITHUB_TOKEN ? { COPILOT_GITHUB_TOKEN: env.COPILOT_GITHUB_TOKEN } : {});
     return { ...basicsOf(env), ...homes, ...NO_PROXY, ...jobDirectoriesOf(directory), ...credential };
 }
 
@@ -525,7 +529,7 @@ export function spawnWithTimeout(
  */
 export function performRun(run: PlannedRun, request: Request, directory: string, results: string, work: string, config: Config, server: ApiServer): Promise<Spawned> {
     const { command, args } = agentCommand(run.agent, config.models[run.agent], promptFor(request, server.urls));
-    const homes = prepareAgentHomes(join(work, 'homes', run.id));
+    const homes = prepareAgentHomes(join(work, 'homes', run.id), join(work, NPM_CACHE));
     mkdirSync(results, { recursive: true });
     const env = agentEnvironment(run.agent, homes, process.env, directory);
     return spawnWithTimeout(command, args, {

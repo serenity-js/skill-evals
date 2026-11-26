@@ -29,7 +29,7 @@ function passing(overrides: Partial<SmokeInput> = {}): SmokeInput {
             credits: 0.4,
             premiumRequests: undefined,
             checksSandboxed: true,
-            agentEnvironment: [ 'HOME', 'KIRO_API_KEY', 'KIRO_HOME', 'COPILOT_HOME', 'COPILOT_AUTO_UPDATE', 'LANG', 'LC_ALL', 'JOBS_DIR', 'NO_PROXY', 'PATH', 'RESULTS_DIR', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'no_proxy' ],
+            agentEnvironment: [ 'HOME', 'KIRO_API_KEY', 'KIRO_HOME', 'COPILOT_HOME', 'COPILOT_AUTO_UPDATE', 'LANG', 'LC_ALL', 'JOBS_DIR', 'NO_PROXY', 'PATH', 'RESULTS_DIR', 'SHELL', 'TERM', 'TMPDIR', 'USER', 'no_proxy', 'npm_config_cache' ],
             serverRequests: { agent: 1, checks: 4 },
         },
         logs: { tsc: true, test: true },
@@ -177,6 +177,10 @@ describe('smokeChecks', () => {
         expect(failed(env([ 'PATH', 'KIRO_API_KEY', 'GH_TOKEN' ]))[0].detail).toBe('the agent got GH_TOKEN, which it shouldn\'t');
         expect(failed(env([ 'PATH', 'KIRO_API_KEY', 'AWS_SECRET_ACCESS_KEY' ]))[0].detail).toBe('the agent got AWS_SECRET_ACCESS_KEY, which it shouldn\'t');
         expect(failed(env([ 'PATH' ]))[0].detail).toBe('the agent got none of its credentials: KIRO_API_KEY');
+
+        const copilot = (names: string[]) => passing({ agent: 'copilot', record: { ...passing().record!, credits: undefined, premiumRequests: 1, agentEnvironment: names } });
+        expect(failed(copilot([ 'PATH', 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN' ]))[0].detail).toBe('the agent got GH_TOKEN, which it shouldn\'t');
+        expect(failed(copilot([ 'PATH', 'GH_TOKEN' ]))[0].detail).toBe('the agent got GH_TOKEN, which it shouldn\'t');
     });
 });
 

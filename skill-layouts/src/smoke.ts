@@ -22,9 +22,9 @@ const COMMAND = 'cat .mocharc.yml';
 
 const CREDENTIALS: Record<Agent, string[]> = {
     kiro: [ 'KIRO_API_KEY' ],
-    copilot: [ 'COPILOT_GITHUB_TOKEN', 'GH_TOKEN' ],
+    copilot: [ 'COPILOT_GITHUB_TOKEN' ],
 };
-const HOMES = [ 'KIRO_HOME', 'COPILOT_HOME', 'COPILOT_AUTO_UPDATE' ];
+const HOMES = [ 'KIRO_HOME', 'COPILOT_HOME', 'COPILOT_AUTO_UPDATE', 'npm_config_cache' ];
 // the harness sets them, so the agent reaches the local API server directly
 const NO_PROXY = [ 'NO_PROXY', 'no_proxy' ];
 // the harness sets them in every run, for request 9's calculation jobs
