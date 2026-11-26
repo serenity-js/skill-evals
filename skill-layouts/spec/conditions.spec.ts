@@ -142,6 +142,14 @@ describe('the conditions of a resumed evaluation', () => {
         expect(saved()).toEqual({ shared, agents: { kiro, copilot } });
     });
 
+    it("reads a conditions.json without shared.fixtures, as the recorded rounds' are: no fixture planned is no change, and a planned one is new", () => {
+        const { fixtures: _none, ...withoutFixtures } = shared;
+        writeFileSync(file, JSON.stringify({ shared: withoutFixtures, agents: { kiro } }));
+
+        expect(() => checkConditions(file, { ...shared, fixtures: {} }, { kiro })).not.toThrow();
+        expect(() => checkConditions(file, shared, { kiro })).toThrow(/^the runs in .+ were made under other conditions, so they can't be resumed:\n {2}fixtures\.precision: none, now sha256:7777\n/);
+    });
+
     it('refuses a Copilot resume after requests.json changed, and says what changed', () => {
         kiroOnlyPilot();
 
@@ -250,5 +258,12 @@ describe('fixtures.json', () => {
         writeFixtures(results, fixtures);
 
         expect(JSON.parse(readFileSync(join(results, 'fixtures.json'), 'utf8')).agents).toEqual({ kiro, copilot });
+    });
+
+    it('writes no agents into fixtures.json when conditions.json has none, as one from before agents were recorded', () => {
+        writeFileSync(join(results, 'conditions.json'), JSON.stringify({ shared }));
+        writeFixtures(results, { examples: [] });
+
+        expect(JSON.parse(readFileSync(join(results, 'fixtures.json'), 'utf8'))).toEqual({ examples: [] });
     });
 });

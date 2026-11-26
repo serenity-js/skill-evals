@@ -157,7 +157,8 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
 const modeName = (mode: Mode) => mode.mode === 'held-back' ? `held-back-${ mode.layout }` : mode.mode;
 const log = (message: string) => console.log(`eval:skill-layouts: ${ message }`);
 
-function versionOf(command: string): string {
+/** What `command --version` prints, trimmed, or `not installed` when it can't start or fails. */
+export function versionOf(command: string): string {
     try {
         return execFileSync(command, [ '--version' ], { encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'ignore' ] }).trim();
     }

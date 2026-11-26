@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { finishEvaluation, reparseResults, rescoreResults, summariseResults } from '../src/cli.ts';
 import { freePort, startApiServer, urlsOf } from '../src/api-server.ts';
 import { unreachable } from '../src/outcome.ts';
-import { agentVersionOf, commandDidNotStart, type Config, rescoreNetworkFailures, resultOf, type RunRecord, scoreRun, startRun } from '../src/runs.ts';
+import { agentVersionOf, CommandDidNotStart, commandDidNotStart, type Config, rebuildWorkingCopy, rescoreNetworkFailures, resultOf, type RunRecord, scoreRun, startRun } from '../src/runs.ts';
 import { promptFor } from '../src/requests.ts';
 import type { PlannedRun } from '../src/review.ts';
 
@@ -299,6 +299,39 @@ describe('startRun', () => {
     });
 });
 
+describe('rebuildWorkingCopy', () => {
+
+    let root: string;
+    let commit: string;
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', [ '-c', 'user.name=t', '-c', 'user.email=t@localhost', '-c', 'commit.gpgsign=false', ...args ], { cwd, encoding: 'utf8' }).trim();
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'skill-layouts-rebuild-'));
+        mkdirSync(join(root, 'template', 'src'), { recursive: true });
+        writeFileSync(join(root, 'template', 'src', 'Actors.ts'), 'export class Actors {}\n');
+        git(join(root, 'template'), 'init', '--quiet');
+        git(join(root, 'template'), 'add', '--all');
+        git(join(root, 'template'), 'commit', '--quiet', '--message', 'the template');
+        commit = git(join(root, 'template'), 'rev-parse', 'HEAD');
+    });
+    afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+    it("names the template's commit, and the first line of git apply's error, when a run's diff doesn't apply", () => {
+        const diff = [
+            'diff --git a/src/Actors.ts b/src/Actors.ts',
+            '--- a/src/Actors.ts',
+            '+++ b/src/Actors.ts',
+            '@@ -1 +1 @@',
+            '-export class Cast {}',
+            '+export class Actors implements Cast {}',
+            '',
+        ].join('\n');
+
+        expect(() => rebuildWorkingCopy(join(root, 'rebuilt'), { template: join(root, 'template'), commit, fixture: undefined }, diff))
+            .toThrow(new Error(`its diff doesn't apply to the template at ${ commit }: error: patch failed: src/Actors.ts:1`));
+    });
+});
+
 describe('scoreRun', () => {
 
     let directory: string;
@@ -517,6 +550,26 @@ describe('resultOf', () => {
         expect(result.exitCode).not.toBe(0);
         expect(result.log).toMatch(/timed out after 0\.3 s/);
         expect(readFileSync(join(directory, 'sleep.log'), 'utf8')).toBe(result.log);
+    });
+
+    it("stops on sandbox-exec's refusal to start the command, rather than scoring it as a failed check", () => {
+        // a stand-in for sandbox-exec inside another sandbox, which exits with 71 and says why on standard error
+        const refusing = join(directory, 'sandbox-exec');
+        writeFileSync(refusing, '#!/bin/sh\necho "sandbox-exec: sandbox_apply: Operation not permitted" >&2\nexit 71\n', { mode: 0o755 });
+
+        const run = () => resultOf('npm', [ 'test' ], directory, join(directory, 'log'), 1, { sandboxExec: refusing });
+
+        expect(run).toThrow(CommandDidNotStart);
+        expect(run).toThrow(new Error("couldn't start npm: sandbox-exec: sandbox_apply: Operation not permitted"));
+        expect(existsSync(join(directory, 'log'))).toBe(false);
+    });
+
+    it("scores a sandboxed command that exits with 71 as failed, when sandbox-exec didn't say it refused", () => {
+        const failing = join(directory, 'sandbox-exec');
+        writeFileSync(failing, '#!/bin/sh\necho "npm ERR! something else" >&2\nexit 71\n', { mode: 0o755 });
+
+        expect(resultOf('npm', [ 'test' ], directory, join(directory, 'log'), 1, { sandboxExec: failing }))
+            .toEqual({ exitCode: 71, log: 'npm ERR! something else\n', sandboxed: true });
     });
 
     it("still stops on a command that couldn't start", () => {

@@ -766,6 +766,9 @@ These are to be fixed in the next pull requests, each with a failing spec first:
   leave out the network failures and agent failures, as the correctness rate does
 - **Each run's `HOME` keeps the agents' own installs.** Kiro unpacks about 300 MB into it, and Copilot about 250 MB,
   and the homes stay in `<work>` after the runs, so a 16-run pilot leaves 4 to 5 GB there
+- **Preparing the layouts' projects gives npm your whole environment.** `project.ts` runs `npm install`, `npm pack`
+  and `npx skills` with every variable you've exported, credentials included, and `npm install` runs the install
+  scripts of the projects' dependencies with them. They should get the basics the checks get, and no credentials
 
 ## Developing the harness
 

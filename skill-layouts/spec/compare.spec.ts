@@ -232,6 +232,37 @@ describe('compareResults', () => {
     });
 });
 
+describe("compareResults' run shown per layout", () => {
+
+    let results: string;
+
+    beforeEach(() => {
+        results = mkdtempSync(join(tmpdir(), 'skill-layouts-compare-shown-'));
+        // the IDs sort the other way, so only the repeat, then the agent, can pick the run shown
+        const planned: PlannedRun[] = [
+            { id: 'aaaa0003', agent: 'kiro', layout: 'b', request: '11-add-to-messy-code', repeat: 2 },
+            { id: 'aaaa0002', agent: 'copilot', layout: 'b', request: '11-add-to-messy-code', repeat: 1 },
+            { id: 'zzzz0001', agent: 'kiro', layout: 'b', request: '11-add-to-messy-code', repeat: 1 },
+        ];
+        writeFileSync(join(results, 'mapping.json'), JSON.stringify(planned));
+        for (const { id } of planned) {
+            mkdirSync(join(results, 'runs', id), { recursive: true });
+            writeFileSync(join(results, 'runs', id, 'result.json'), JSON.stringify(record(id, {})));
+        }
+    });
+    afterEach(() => rmSync(results, { recursive: true, force: true }));
+
+    it("shows the first repeat's run, and Kiro's before Copilot's within a repeat, whatever their IDs", () => {
+        expect(compareResults(results)).toContain('<th>b: run zzzz0001, kiro, correct</th>');
+    });
+
+    it("shows Copilot's run of the first repeat when Kiro has none, before Kiro's of a later repeat", () => {
+        rmSync(join(results, 'runs', 'zzzz0001'), { recursive: true });
+
+        expect(compareResults(results)).toContain('<th>b: run aaaa0002, copilot, correct</th>');
+    });
+});
+
 describe('--compare', () => {
 
     it("only reads, like --summarise, so it needs no serenity-js clone", () => {

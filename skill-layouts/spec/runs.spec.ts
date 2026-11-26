@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { Writable } from 'node:stream';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { parseArguments } from '../src/cli.ts';
+import { parseArguments, versionOf } from '../src/cli.ts';
 import { LAYOUTS } from '../src/layouts.ts';
 import { RUNS_PER_LAYOUT_FOR_A_DECISION } from '../src/summary.ts';
 import { agentCommand, agentEnvironment, agentsToRun, environmentNames, loadConfig, modelProblem, preflightProblems, checksSandbox, resultOf, runsFor, sandboxed, sandboxPathsOf, sandboxProblems, sandboxProfile, spawnWithTimeout, testEnvironment } from '../src/runs.ts';
@@ -362,6 +362,35 @@ describe('agentEnvironment', () => {
     });
 });
 
+describe('versionOf', () => {
+
+    let bin: string;
+
+    beforeEach(() => {
+        bin = mkdtempSync(join(tmpdir(), 'skill-layouts-version-'));
+    });
+    afterEach(() => rmSync(bin, { recursive: true, force: true }));
+
+    it("records what the agent's --version prints, trimmed, and nothing it prints on standard error", () => {
+        writeFileSync(join(bin, 'agent'), '#!/bin/sh\n[ "$1" = --version ] && echo "  kiro-cli 3.5.0" && echo "a warning" >&2\n', { mode: 0o755 });
+
+        expect(versionOf(join(bin, 'agent'))).toBe('kiro-cli 3.5.0');
+    });
+
+    it("keeps every line of a version that's more than one, as Copilot's is", () => {
+        writeFileSync(join(bin, 'agent'), "#!/bin/sh\nprintf 'GitHub Copilot CLI 1.0.114.\\nRun copilot update to check for updates.\\n'\n", { mode: 0o755 });
+
+        expect(versionOf(join(bin, 'agent'))).toBe('GitHub Copilot CLI 1.0.114.\nRun copilot update to check for updates.');
+    });
+
+    it("says 'not installed' when the agent can't start, or --version fails", () => {
+        writeFileSync(join(bin, 'failing'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+        expect(versionOf(join(bin, 'no-such-agent'))).toBe('not installed');
+        expect(versionOf(join(bin, 'failing'))).toBe('not installed');
+    });
+});
+
 describe('agentsToRun', () => {
 
     const pilot = runsFor({ mode: 'pilot', requests: [ '1', '4' ] }, { requests: [ '1-a', '4-b' ].map(id => ({ id, kind: '', prompt: '', needs: [], apis: [ 'mathjs' as const ] })), heldBack: [] });
@@ -392,6 +421,24 @@ describe('preflightProblems', () => {
             'pin the model of copilot in skill-layouts/config.json before the runs',
             'Copilot needs COPILOT_GITHUB_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME and HOME, without your login, and gets no GH_TOKEN',
         ]);
+    });
+
+    it("lists the pins in the order of the agents it's given, then Kiro's credential before Copilot's, then Copilot's personal skills, then the sandbox", () => {
+        const home = mkdtempSync(join(tmpdir(), 'skill-layouts-preflight-'));
+        try {
+            mkdirSync(join(home, '.agents', 'skills'), { recursive: true });
+
+            expect(preflightProblems([ 'copilot', 'kiro' ], { ...config, models: { kiro: '', copilot: '' } }, {}, { home, sandboxProblems: () => [ "sandbox-exec can't start here" ] })).toEqual([
+                'pin the model of copilot and kiro in skill-layouts/config.json before the runs',
+                'Kiro needs KIRO_API_KEY: each run has its own KIRO_HOME, without your login',
+                'Copilot needs COPILOT_GITHUB_TOKEN, with a token that can use Copilot: each run has its own COPILOT_HOME and HOME, without your login, and gets no GH_TOKEN',
+                `Copilot reads personal skills from ${ join(home, '.agents', 'skills') }, which COPILOT_HOME doesn't cover: move it aside for the evaluation`,
+                "sandbox-exec can't start here",
+            ]);
+        }
+        finally {
+            rmSync(home, { recursive: true, force: true });
+        }
     });
 
     it("refuses to start where the harness's checks can't run sandboxed", () => {

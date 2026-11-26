@@ -274,9 +274,12 @@ export function sandboxProfile({ writable, readable, home }: SandboxPaths): stri
     ].join('\n');
 }
 
+/** macOS's sandbox-exec, which the harness's checks run under */
+export const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
+
 /** The harness's command, under sandbox-exec, with the profile of the run's paths. */
-export function sandboxed(command: string, args: string[], paths: SandboxPaths): { command: string, args: string[] } {
-    return { command: '/usr/bin/sandbox-exec', args: [ '-p', sandboxProfile(paths), command, ...args ] };
+export function sandboxed(command: string, args: string[], paths: SandboxPaths, sandboxExec: string = SANDBOX_EXEC): { command: string, args: string[] } {
+    return { command: sandboxExec, args: [ '-p', sandboxProfile(paths), command, ...args ] };
 }
 
 /**
@@ -560,6 +563,8 @@ export interface CheckOptions {
     env?: NodeJS.ProcessEnv;
     /** Run without sandbox-exec: only given --unsandboxed, where sandbox-exec isn't available */
     unsandboxed?: boolean;
+    /** The sandbox-exec to run the checks under; another only in the specs, to stand in for its refusal */
+    sandboxExec?: string;
 }
 
 /**
@@ -567,9 +572,9 @@ export interface CheckOptions {
  * Throws CommandDidNotStart when the command couldn't start: a spawn error, such as ENOENT or EACCES, or sandbox-exec's
  * refusal. A command its timeout stopped returns a failure, whose log says it timed out.
  */
-export function resultOf(command: string, args: string[], cwd: string, logFile: string, timeoutMinutes: number, { env = process.env, unsandboxed = false }: CheckOptions = {}): CommandResult {
+export function resultOf(command: string, args: string[], cwd: string, logFile: string, timeoutMinutes: number, { env = process.env, unsandboxed = false, sandboxExec = SANDBOX_EXEC }: CheckOptions = {}): CommandResult {
     const environment = testEnvironment(env, cwd);
-    const inSandbox = unsandboxed ? { command, args } : sandboxed(command, args, sandboxPathsOf(environment, cwd));
+    const inSandbox = unsandboxed ? { command, args } : sandboxed(command, args, sandboxPathsOf(environment, cwd), sandboxExec);
     const isSandboxed = ! unsandboxed;
     let result: CommandResult;
     try {
