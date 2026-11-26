@@ -323,12 +323,24 @@ async function evaluate(args: Arguments): Promise<void> {
     }
 
     writeFixtures(results, fixtures);
-    const scores = join(review, 'scores.json');
+    await finishEvaluation(results, args.work, planned, { agents, agent: args.agent, sandbox, config });
+}
+
+/**
+ * The end of an evaluation, once its runs are done: a blank scores.json for the reviewer, the network failures scored
+ * again, with the checks sandboxed as the runs' were, or not, given --unsandboxed, and the summary.
+ */
+export async function finishEvaluation(
+    results: string, work: string, planned: PlannedRun[],
+    { agents, agent, sandbox, config }: { agents: readonly Agent[], agent?: Agent, sandbox: { problems: string[], checks: CheckOptions }, config: Config },
+): Promise<void> {
+    const scores = join(results, 'review', 'scores.json');
     if (! existsSync(scores)) {
+        mkdirSync(dirname(scores), { recursive: true });
         writeFileSync(scores, `${ JSON.stringify(scoresTemplate(planned), null, 2) }\n`);
     }
-    await rescoreResults(results, args.work, { agents, checks: sandbox.checks });
-    summariseResults(results, { agent: args.agent });
+    await rescoreResults(results, work, { agents, sandboxProblems: () => sandbox.problems, checks: sandbox.checks, config });
+    summariseResults(results, { agent });
 }
 
 /** Prints the smoke run's checks, one line each, and fails, naming the failed checks, when any failed. */

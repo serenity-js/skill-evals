@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { reparseResults, rescoreResults, summariseResults } from '../src/cli.ts';
+import { finishEvaluation, reparseResults, rescoreResults, summariseResults } from '../src/cli.ts';
 import { freePort, startApiServer, urlsOf } from '../src/api-server.ts';
 import { unreachable } from '../src/outcome.ts';
 import { agentVersionOf, commandDidNotStart, type Config, rescoreNetworkFailures, resultOf, type RunRecord, scoreRun, startRun } from '../src/runs.ts';
@@ -184,6 +184,26 @@ describe('rescoring and summarising', () => {
             runCommand: () => ({ exitCode: 1, log: '' }),
         })).rejects.toThrow(/run 3f9c2a1e: the local API server didn't answer http:\/\/127\.0\.0\.1:\d+\/v4\/\?expr=1, which is the harness's failure, not the run's\.\nIts output:\n[\s\S]*listening on \d+[\s\S]*Its last requests:/);
         expect(readFileSync(resultFile(), 'utf8')).toBe(before);
+    });
+
+    describe('at the end of an evaluation', () => {
+
+        beforeEach(() => {
+            writeFileSync(join(results, 'conditions.json'), JSON.stringify({ shared: { apiServer: evaluation.apiServer }, agents: {} }));
+            writeFileSync(resultFile(), JSON.stringify({ ...networkFailure, outcome: 'correct' }, null, 2));
+        });
+
+        it('summarises the runs of an evaluation given --unsandboxed, where sandbox-exec is not available', async () => {
+            await finishEvaluation(results, work, [ run ], { agents: [ 'kiro' ], sandbox: { problems: [], checks: { unsandboxed: true } }, config: evaluation });
+
+            expect(JSON.parse(readFileSync(join(results, 'summary.json'), 'utf8'))).toMatchObject({ runs: 1, planned: 1 });
+            expect(existsSync(join(results, 'review', 'scores.json'))).toBe(true);
+        });
+
+        it('refuses to rescore, with what refuses the checks, where sandbox-exec is not available and it is not given --unsandboxed', async () => {
+            await expect(finishEvaluation(results, work, [ run ], { agents: [ 'kiro' ], sandbox: { problems: [ "sandbox-exec can't start here" ], checks: { unsandboxed: false } }, config: evaluation }))
+                .rejects.toThrow("nothing rescored: sandbox-exec can't start here");
+        });
     });
 
     it('--rescore refuses results made before the local API server, says why, and changes no result.json', async () => {
