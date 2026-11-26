@@ -472,6 +472,16 @@ describe('sandboxed', () => {
             .toEqual([ '/work/npm-cache', '/Users/me/.nvm/versions/node/v24.15.0' ]);
     });
 
+    it("lets the checks read the npm cache they use, ~/.npm, since they don't get the agents' shared cache in <work>", () => {
+        const harness = { HOME: '/Users/me', TMPDIR: '/var/folders/x/T/', npm_config_cache: '/work/npm-cache' };
+        const checks = testEnvironment(harness, '/work/runs/x');
+
+        expect(checks.npm_config_cache).toBeUndefined();
+        expect(checks.HOME).toBe('/Users/me');
+        expect(sandboxPathsOf(checks, '/work/runs/x', '/Users/me/.nvm/versions/node/v24.15.0/bin/node').readable)
+            .toEqual([ '/Users/me/.npm', '/Users/me/.nvm/versions/node/v24.15.0' ]);
+    });
+
     it("refuses to start the runs when sandbox-exec can't start, as inside another sandbox, unless it's given --unsandboxed", () => {
         const refused = () => { throw new Error('sandbox-exec: sandbox_apply: Operation not permitted'); };
 
