@@ -125,4 +125,8 @@ describe('the agents', () => {
             expect(adapterOf(agent).skills.reads).toContain(adapterOf(agent).skills.directory);
         }
     });
+
+    it("say which project directories are agents' own, rather than the project's: Kiro's .kiro, and the .agents and .claude Copilot reads skills from", () => {
+        expect(AGENTS.map(agent => adapterOf(agent).skills.agentDirectories)).toEqual([ [ '.kiro' ], [ '.agents', '.claude' ] ]);
+    });
 });

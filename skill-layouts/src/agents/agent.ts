@@ -40,8 +40,10 @@ export interface AgentAdapter<Id extends string = string> {
      * - cliAgent: the skills CLI's ID for the agent
      * - directory: the project directory the CLI links them into, one of `reads`
      * - needs: a directory the project needs before the CLI links into it at all
+     * - agentDirectories: the project directories that hold agents' own configuration and skills, rather than the
+     *   project's, which a run's diff leaves out whole
      */
-    readonly skills: { readonly reads: readonly string[], readonly cliAgent: string, readonly directory: string, readonly needs?: string };
+    readonly skills: { readonly reads: readonly string[], readonly cliAgent: string, readonly directory: string, readonly needs?: string, readonly agentDirectories: readonly string[] };
     /** The smoke run's check of the usage the agent reports: credits, or premium requests */
     usageProblem(record: { credits?: number, premiumRequests?: number }): string | undefined;
 }

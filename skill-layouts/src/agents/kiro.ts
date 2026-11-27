@@ -33,6 +33,6 @@ export const kiro: AgentAdapter<'kiro'> = {
     parseStream: (stream, { skills }) => parseKiroStream(stream, skills),
     // Kiro reads project skills from .kiro/skills; npx skills only links into it when the project has a .kiro directory,
     // as a Kiro user's project would
-    skills: { reads: [ '.kiro/skills' ], cliAgent: 'kiro-cli', directory: '.kiro/skills', needs: '.kiro' },
+    skills: { reads: [ '.kiro/skills' ], cliAgent: 'kiro-cli', directory: '.kiro/skills', needs: '.kiro', agentDirectories: [ '.kiro' ] },
     usageProblem: ({ credits }) => credits === undefined ? 'no credits recorded' : undefined,
 };

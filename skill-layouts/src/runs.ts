@@ -275,14 +275,17 @@ export function checksOf(directory: string, diff: string): Check[] {
 }
 
 // what the harness installed, or the tests wrote, rather than what the agent changed; skills-lock.json and the skill
-// directories would give the layout away to the reviewer. The skill directories are the ones the agents read skills
-// from, and the directories npx skills needs before it links into them, such as .kiro, as the adapters declare them
+// directories would give the layout away to the reviewer. As the adapters declare them, they're the agents' own
+// directories, such as .kiro, whole, and the skill directories the agents read outside them, such as .github/skills
+const AGENT_DIRECTORIES = AGENTS.flatMap(agent => adapterOf(agent).skills.agentDirectories);
 const NOT_THE_AGENTS_CHANGES = [
     'node_modules/',
-    ...new Set(AGENTS.flatMap(agent => {
-        const { reads, needs } = adapterOf(agent).skills;
-        return [ ...(needs ? [ `${ needs }/` ] : []), ...reads.filter(read => ! needs || ! read.startsWith(`${ needs }/`)).map(read => `${ read }/`) ];
-    })),
+    ...new Set([
+        ...AGENT_DIRECTORIES.map(directory => `${ directory }/`),
+        ...AGENTS.flatMap(agent => adapterOf(agent).skills.reads)
+            .filter(read => ! AGENT_DIRECTORIES.some(directory => read.startsWith(`${ directory }/`)))
+            .map(read => `${ read }/`),
+    ]),
     'skills-lock.json', 'package-lock.json', 'reports/', 'target/', `${ JOBS_DIRECTORY }/`, `${ RESULTS_DIRECTORY }/`,
 ];
 

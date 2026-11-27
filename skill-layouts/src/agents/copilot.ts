@@ -52,7 +52,8 @@ export const copilot: AgentAdapter<'copilot'> = {
             : [];
     },
     parseStream: (stream, { timedOut, skills }) => parseCopilotStream(stream, { timedOut, skills }),
-    // Copilot reads project skills from .github/skills, .agents/skills and .claude/skills; npx skills links .agents/skills
-    skills: { reads: [ '.github/skills', '.agents/skills', '.claude/skills' ], cliAgent: 'github-copilot', directory: '.agents/skills' },
+    // Copilot reads project skills from .github/skills, .agents/skills and .claude/skills; npx skills links .agents/skills.
+    // .agents and .claude hold agents' configuration, not the project's, while .github holds the project's own workflows
+    skills: { reads: [ '.github/skills', '.agents/skills', '.claude/skills' ], cliAgent: 'github-copilot', directory: '.agents/skills', agentDirectories: [ '.agents', '.claude' ] },
     usageProblem: ({ premiumRequests }) => premiumRequests === undefined ? 'no premium requests recorded' : undefined,
 };

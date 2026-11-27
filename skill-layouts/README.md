@@ -713,8 +713,9 @@ error.
 A skill file is a Markdown file, `<root>/<skill>/<file>.md`, in a directory an agent reads skills from, as its adapter
 in `src/agents/` declares in `skills.reads`, or in the `skills/` of a package the harness packs, in `node_modules`.
 Kiro reads `.kiro/skills`, and Copilot `.github/skills`, `.agents/skills` and `.claude/skills`. The same directories,
-and the names of the layouts' skills, are what the review packets and the judge's inputs hide, and the agents' skill
-directories are left out of a run's diff.
+and the names of the layouts' skills, are what the review packets and the judge's inputs hide. A run's diff leaves out
+the agents' own directories whole, `.kiro`, `.agents` and `.claude`, as the adapters declare them in
+`skills.agentDirectories`, and the skill directories the agents read outside them, `.github/skills`.
 
 ### The patterns' checks
 

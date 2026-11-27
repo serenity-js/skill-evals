@@ -299,9 +299,9 @@ describe('startRun', () => {
         expect(execFileSync('git', [ 'status', '--porcelain' ], { cwd: directory, encoding: 'utf8' })).toBe('');
     });
 
-    it("leaves the skill directories every agent reads, and .kiro, which npx skills needs, out of the agent's diff, and nothing else of .github", () => {
+    it("leaves the agents' own directories, .kiro, .agents and .claude, out of the agent's diff whole, and of .github only the skills, so npx skills' files stay out", () => {
         const directory = startRun(run, request, join(root, 'project'), join(root, 'work'), urlsOf(4567));
-        for (const file of [ '.kiro/skills/a/SKILL.md', '.kiro/settings.json', '.agents/skills/a/SKILL.md', '.claude/skills/a/SKILL.md', '.github/skills/a/SKILL.md', '.github/workflows/check.yml' ]) {
+        for (const file of [ '.kiro/skills/a/SKILL.md', '.kiro/settings.json', '.agents/skills/a/SKILL.md', '.agents/config.json', '.claude/skills/a/SKILL.md', '.claude/settings.json', '.github/skills/a/SKILL.md', '.github/workflows/check.yml' ]) {
             mkdirSync(dirname(join(directory, file)), { recursive: true });
             writeFileSync(join(directory, file), '');
         }
