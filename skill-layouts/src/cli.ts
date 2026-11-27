@@ -7,22 +7,28 @@
 // Evaluates how a package's skills should be laid out: packs the Serenity/JS packages, gives them each layout's
 // skills, installs them into copies of the Mocha template, runs Kiro and GitHub Copilot on each request, and scores the
 // runs. See the README next to this directory's src/.
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-import { adapterOf, versionOf } from './agents/index.ts';
+import { adapterOf, prepareAgentHomes, versionOf } from './agents/index.ts';
 import { ensurePortFree, withApiServer } from './api-server.ts';
-import { run } from './child-processes.ts';
+import { run, runBuffer, spawnWithTimeout } from './child-processes.ts';
 import { type AgentConditions, checkConditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles } from './conditions.ts';
-import { type Check, CHECKLIST, conventionsScore } from './conventions.ts';
+import { type Check, CHECKLIST, type ChecklistItem, conventionsScore, exercises } from './conventions.ts';
+import { Calibration, CalibrationFiles } from './judging/calibration.ts';
+import { Judge, JudgePrompt, type Spawn } from './judging/judge.ts';
+import { CalibrationProtocol } from './judging/protocol.ts';
+import { ReviewGuide } from './judging/review-guide.ts';
+import { JudgeIdentity } from './judging/session-store.ts';
+import { FixtureHistory, ProjectBuilder } from './judging/starting-project.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
-import { calibrate, CalibrationFiles } from './calibration.ts';
 import { compareResults } from './compare.ts';
 import { checkReference, type ReferenceCheck, renderReferenceCheck } from './references.ts';
 import { loadRequests, type Request } from './requests.ts';
-import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, type RunKey, scoresTemplate } from './review.ts';
+import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, REVIEW_GUIDE, type RunKey, scoresTemplate } from './review.ts';
 import { Results } from './results.ts';
 import { renderSmoke, SMOKE_REQUEST, smokeChecks, smokeProblem } from './smoke.ts';
 import { type CheckOptions, checksOf, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, resultOf, runsFor, scoreRun, startRun, writeReviewPacket } from './runs.ts';
@@ -615,12 +621,55 @@ export async function checkReferences(
     log(`all ${ checks.length } reference solutions pass, and fail with their expected values made wrong`);
 }
 
+/** What a calibration is composed of, besides the arguments: its configuration, and the dependencies it runs with. */
+export interface CalibrationSetup {
+    config: Pick<Config, 'judge' | 'runTimeoutMinutes' | 'apiServer'>;
+    env: NodeJS.ProcessEnv;
+    spawn: Spawn;
+    /** The judge's agent's version, which is part of the identity its sessions are reused by */
+    version: string;
+    protocol: CalibrationProtocol;
+    log: (message: string) => void;
+}
+
+/** The calibration of the judge `setup` configures, over the checklist, the review guide and the requests as they are. */
+export function calibrationOf(args: Pick<Arguments, 'template' | 'out' | 'work'>, { config, env, spawn, version, protocol, log: logged }: CalibrationSetup): Calibration {
+    const commands = { run, runBuffer };
+    const { requests, heldBack } = loadRequests();
+    const adapter = adapterOf(config.judge.agent);
+    return new Calibration({
+        judge: new Judge({
+            adapter,
+            model: config.judge.model,
+            homes: prepareAgentHomes(join(args.work, 'homes', 'judge'), new Work(args.work).npmCache),
+            spawn,
+            env,
+            timeoutMs: config.runTimeoutMinutes * 60_000,
+            prompt: JudgePrompt.forProject(),
+        }),
+        identity: JudgeIdentity.of(config.judge.agent, config.judge.model, version),
+        files: new CalibrationFiles(args.out),
+        guide: ReviewGuide.parse(readFileSync(REVIEW_GUIDE, 'utf8'), CHECKLIST),
+        protocol,
+        checklist: { items: CHECKLIST.map(item => item.id), exercises: (request, item) => exercises(request, item as ChecklistItem) },
+        requests: new Map([ ...requests, ...heldBack ].map(request => [ request.id, request ])),
+        projects: new ProjectBuilder(commands),
+        fixtures: new FixtureHistory(evalRoot, commands),
+        template: args.template,
+        work: args.work,
+        defaultPort: config.apiServer.port,
+        randomName: () => randomBytes(4).toString('hex'),
+        log: logged,
+    });
+}
+
 /**
  * Judges every run the reviewer scored in the recorded rounds, three times, and compares the judge's verdicts with
  * theirs, item by item, in <out>/calibration/calibration.md. It runs the judge's agent, so it needs its credential.
  */
 export async function calibrateJudge(args: Arguments, { config = loadConfig(), env = process.env }: { config?: Config, env?: NodeJS.ProcessEnv } = {}): Promise<void> {
-    const problem = adapterOf(config.judge.agent).credentialProblem(env);
+    const adapter = adapterOf(config.judge.agent);
+    const problem = adapter.credentialProblem(env);
     if (problem) {
         throw new Error(`nothing judged: ${ problem }`);
     }
@@ -629,7 +678,8 @@ export async function calibrateJudge(args: Arguments, { config = loadConfig(), e
             throw new Error(`${ round } isn't a round's results: it has no mapping.json`);
         }
     }
-    await calibrate({ rounds: args.rounds, template: args.template, out: args.out, work: args.work, config, env, log });
+    const calibration = calibrationOf(args, { config, env, spawn: spawnWithTimeout, version: versionOf(adapter), protocol: new CalibrationProtocol(), log });
+    await calibration.run(args.rounds);
     log(`the judge's verdicts compared with the reviewer's: ${ new CalibrationFiles(args.out).markdown }`);
 }
 

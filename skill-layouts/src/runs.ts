@@ -83,7 +83,7 @@ export interface Config {
     template: { commit: string };
     /** The port of the local API server, on 127.0.0.1, the same for every run of the evaluation, so their prompts and URLs are */
     apiServer: { port: number };
-    /** The agent and the model that judge the runs' code, in sessions of their own: see judge.ts */
+    /** The agent and the model that judge the runs' code, in sessions of their own: see judging/judge.ts */
     judge: { agent: Agent, model: string };
     runTimeoutMinutes: number;
     testTimeoutMinutes: number;

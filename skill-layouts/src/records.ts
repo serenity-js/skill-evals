@@ -9,7 +9,7 @@ import type { Conditions } from './conditions.ts';
 import type { Config, RunRecord } from './runs.ts';
 
 /** Checks a value, at a path in a file, and throws, naming both, when it isn't what the harness expects. */
-type Check = (value: unknown, path: string, file: string) => void;
+export type Check = (value: unknown, path: string, file: string) => void;
 
 const shown = (value: unknown) => {
     const json = JSON.stringify(value);
@@ -25,24 +25,24 @@ function invalid(file: string, path: string, value: unknown, expected: string): 
 const isObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && ! Array.isArray(value);
 
-const expecting = (expected: string, ok: (value: unknown) => boolean): Check => (value, path, file) => {
+export const expecting = (expected: string, ok: (value: unknown) => boolean): Check => (value, path, file) => {
     if (! ok(value)) {
         invalid(file, path, value, expected);
     }
 };
 
-const aString = expecting('a string', value => typeof value === 'string');
+export const aString = expecting('a string', value => typeof value === 'string');
 const aNumber = expecting('a number', value => typeof value === 'number' && Number.isFinite(value));
 const aBoolean = expecting('true or false', value => typeof value === 'boolean');
 const minutes = expecting('a number of minutes, more than 0', value => typeof value === 'number' && value > 0);
 const aPort = expecting('a port, 1 to 65535', value => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 65_535);
 const aRepeat = expecting('a whole number, 1 or more', value => Number.isInteger(value) && (value as number) >= 1);
-const oneOf = (values: readonly string[]) =>
+export const oneOf = (values: readonly string[]) =>
     expecting(`one of ${ values.join(', ') }`, value => typeof value === 'string' && values.includes(value));
 
 const at = (path: string, key: string) => path ? `${ path }.${ key }` : key;
 
-function listOf(check: Check): Check {
+export function listOf(check: Check): Check {
     return (value, path, file) => {
         if (! Array.isArray(value)) {
             invalid(file, path || 'the file', value, 'a list');
@@ -52,7 +52,7 @@ function listOf(check: Check): Check {
 }
 
 /** An object with the required fields, and the optional ones, which are checked when they're there. */
-function fields(required: Record<string, Check>, optional: Record<string, Check> = {}): Check {
+export function fields(required: Record<string, Check>, optional: Record<string, Check> = {}): Check {
     return (value, path, file) => {
         if (! isObject(value)) {
             invalid(file, path || 'the file', value, 'an object');
@@ -80,8 +80,8 @@ function entriesOf(check: Check): Check {
     };
 }
 
-function readJson(file: string): unknown {
-    const text = readFileSync(file, 'utf8');
+/** `text`, the contents of `file`, parsed; or an error that names the file. */
+export function parseJson(text: string, file: string): unknown {
     try {
         return JSON.parse(text);
     }
@@ -90,10 +90,14 @@ function readJson(file: string): unknown {
     }
 }
 
-function read<T>(file: string, check: Check): T {
-    const value = readJson(file);
+/** `value`, the contents of `file`, when it passes the check; or an error that names the field and the file. */
+export function validated<T>(value: unknown, check: Check, file: string): T {
     check(value, '', file);
     return value as T;
+}
+
+function read<T>(file: string, check: Check): T {
+    return validated<T>(parseJson(readFileSync(file, 'utf8'), file), check, file);
 }
 
 const PLAN = listOf(fields({ id: aString, agent: oneOf(AGENTS), layout: oneOf(LAYOUTS), request: aString, repeat: aRepeat }));
