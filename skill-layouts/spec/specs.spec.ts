@@ -233,6 +233,15 @@ describe('a specs directory', () => {
             ]);
         });
 
+        it('reads a README with Windows line endings, as a checkout with core.autocrlf has it', () => {
+            edit('rules/strict-equality/README.md', content => content.replaceAll('\n', '\r\n'));
+
+            const specs = read(root);
+
+            expect(specs.validate()).toEqual([]);
+            expect(specs.rules.get('strict-equality')!.frontmatter?.followsTheProject).toBe('file');
+        });
+
         it("isn't judged: a judged rule's examples are only checked to be there", () => {
             write('rules/descriptive-names/pass/one-letter.ts', 'export const g = 1;\n');
 

@@ -246,7 +246,8 @@ const FRONTMATTER = onlyFields(
     { title: aTitle, source: expecting('a section of a skill file, as <package>/<skill>/<path>#<section>', value => typeof value === 'string' && SKILL_SECTION.test(value)) },
     { followsTheProject: oneOf(FOLLOWS_THE_PROJECT) },
 );
-const FRONTMATTER_LINES = /^---\n([\s\S]*?)\n---\n?/;
+// with \r\n too, as a checkout with core.autocrlf has its files
+const FRONTMATTER_LINES = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n)?/;
 
 const anObject = expecting('an object', value => typeof value === 'object' && value !== null && ! Array.isArray(value));
 const refused = (why: string): Check => (_, path, file) => {
