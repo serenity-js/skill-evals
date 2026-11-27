@@ -134,6 +134,8 @@ describe('parseArguments', () => {
             unsandboxed: false,
             calibrateOnly: false,
             rounds: [],
+            validateOnly: false,
+            specs: undefined,
         });
     });
 

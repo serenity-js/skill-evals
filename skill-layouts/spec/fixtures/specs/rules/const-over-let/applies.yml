@@ -1,0 +1,5 @@
+id: const-over-let.applies
+language: TypeScript
+rule:
+  kind: lexical_declaration
+  regex: ^const\s

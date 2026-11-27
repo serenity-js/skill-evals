@@ -1,0 +1,7 @@
+id: strict-equality
+language: TypeScript
+rule:
+  kind: binary_expression
+  has:
+    field: operator
+    regex: ^(==|!=)$

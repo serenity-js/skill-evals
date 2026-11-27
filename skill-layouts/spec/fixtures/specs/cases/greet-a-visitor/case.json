@@ -1,0 +1,7 @@
+{
+    "kind": "new feature",
+    "project": "greeter",
+    "rules": [ "strict-equality", "descriptive-names" ],
+    "skills": [ "@example/greetings/writing-greetings/SKILL.md" ],
+    "apis": [ "mathjs" ]
+}

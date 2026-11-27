@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { rescoreChecks, summariseResults, writeFixtures } from '../src/cli.ts';
 import { compareResults } from '../src/compare.ts';
-import { readConditions, readRecord, readScores } from '../src/records.ts';
+import { aString, fields, listOf, onlyFields, problemsIn, readConditions, readRecord, readScores } from '../src/records.ts';
 import { readPlan } from '../src/results.ts';
 import type { PlannedRun } from '../src/review.ts';
 import { loadConfig } from '../src/runs.ts';
@@ -95,6 +95,34 @@ describe('the files the harness reads', () => {
             const file = write('result.json', content);
 
             expect(() => readRecord(file)).toThrow(`${ file }: ${ problem }`);
+        });
+    });
+
+    describe('every field that is wrong', () => {
+
+        it('is reported, not just the first', () => {
+            const file = write('result.json', { ...record, durationMs: '1', timedOut: undefined, models: [ 1, 'claude', 2 ] });
+
+            expect(() => readRecord(file)).toThrow([
+                `${ file }: durationMs is "1", not a number`,
+                `${ file }: timedOut is missing`,
+                `${ file }: models[0] is 1, not a string`,
+                `${ file }: models[2] is 2, not a string`,
+            ].join('\n'));
+        });
+
+        it('is listed by problemsIn, one per field', () => {
+            const check = fields({ name: aString, tags: listOf(aString) });
+
+            expect(problemsIn({ name: 'a', tags: [ 'b' ] }, check, 'case.json')).toEqual([]);
+            expect(problemsIn({ tags: [ 1 ] }, check, 'case.json')).toEqual([ 'case.json: name is missing', 'case.json: tags[0] is 1, not a string' ]);
+        });
+
+        it('includes a field onlyFields doesn\'t take, such as a misspelt optional one', () => {
+            const check = onlyFields({ name: aString }, { tags: listOf(aString) });
+
+            expect(problemsIn({ name: 'a', tag: [ 'b' ] }, check, 'case.json')).toEqual([ "case.json: tag isn't a field it takes: name, tags" ]);
+            expect(problemsIn({ name: 'a', tag: [ 'b' ] }, fields({ name: aString }, { tags: listOf(aString) }), 'case.json')).toEqual([]);
         });
     });
 

@@ -1,0 +1,11 @@
+{
+    "template": {
+        "repository": "https://github.com/example/greeter-template",
+        "commit": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "replacements": [
+        { "file": "package.json", "text": "https://api.example.com", "with": "{{mathjs}}" }
+    ],
+    "directories": { "VISITORS_DIR": "visitors" },
+    "ignored": [ "reports/" ]
+}

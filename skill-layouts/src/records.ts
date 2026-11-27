@@ -1,6 +1,7 @@
 // Reading the files the harness writes and reads back: mapping.json, each run's result.json, the reviewer's
 // scores.json, conditions.json and config.json. results.ts says where they are. Each is checked where it's read, so a missing or wrong field stops the harness with
-// the field's name and the file, rather than with a TypeError somewhere further on, or a wrong summary.
+// the field's name and the file, rather than with a TypeError somewhere further on, or a wrong summary. A check reports
+// every field that's wrong, not just the first, so that a specs directory's files can be fixed in one go.
 import { existsSync, readFileSync } from 'node:fs';
 
 import { LAYOUTS } from './layouts.ts';
@@ -16,10 +17,40 @@ const shown = (value: unknown) => {
     return json.length > 60 ? `${ json.slice(0, 60) }…` : json;
 };
 
+/** What's wrong with a file: every field that isn't what the harness expects, one per line, each with its path. */
+export class Invalid extends Error {
+
+    readonly problems: readonly string[];
+
+    constructor(problems: readonly string[]) {
+        super(problems.join('\n'));
+        this.problems = problems;
+    }
+}
+
 function invalid(file: string, path: string, value: unknown, expected: string): never {
-    throw new Error(value === undefined
+    throw new Invalid([ value === undefined
         ? `${ file }: ${ path } is missing`
-        : `${ file }: ${ path } is ${ shown(value) }, not ${ expected }`);
+        : `${ file }: ${ path } is ${ shown(value) }, not ${ expected }` ]);
+}
+
+/** Runs every check, and throws what all of them found wrong, rather than only what the first did. */
+function every(checks: Array<() => void>): void {
+    const problems = checks.flatMap(check => {
+        try {
+            check();
+            return [];
+        }
+        catch (error) {
+            if (error instanceof Invalid) {
+                return error.problems;
+            }
+            throw error;
+        }
+    });
+    if (problems.length > 0) {
+        throw new Invalid(problems);
+    }
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -47,7 +78,7 @@ export function listOf(check: Check): Check {
         if (! Array.isArray(value)) {
             invalid(file, path || 'the file', value, 'a list');
         }
-        value.forEach((item, index) => check(item, `${ path }[${ index }]`, file));
+        every(value.map((item, index) => () => check(item, `${ path }[${ index }]`, file)));
     };
 }
 
@@ -57,26 +88,31 @@ export function fields(required: Record<string, Check>, optional: Record<string,
         if (! isObject(value)) {
             invalid(file, path || 'the file', value, 'an object');
         }
-        for (const [ key, check ] of Object.entries(required)) {
-            check(value[key], at(path, key), file);
-        }
-        for (const [ key, check ] of Object.entries(optional)) {
-            if (value[key] !== undefined) {
-                check(value[key], at(path, key), file);
-            }
-        }
+        every([
+            ...Object.entries(required).map(([ key, check ]) => () => check(value[key], at(path, key), file)),
+            ...Object.entries(optional).filter(([ key ]) => value[key] !== undefined).map(([ key, check ]) => () => check(value[key], at(path, key), file)),
+        ]);
     };
 }
 
+/** As `fields`, refusing any other field too, such as a misspelt optional one, which `fields` would ignore. */
+export function onlyFields(required: Record<string, Check>, optional: Record<string, Check> = {}): Check {
+    const known = [ ...Object.keys(required), ...Object.keys(optional) ];
+    return (value, path, file) => every([
+        () => fields(required, optional)(value, path, file),
+        ...Object.keys(isObject(value) ? value : {}).filter(key => ! known.includes(key)).map(key => () => {
+            throw new Invalid([ `${ file }: ${ at(path, key) } isn't a field it takes: ${ known.join(', ') }` ]);
+        }),
+    ]);
+}
+
 /** An object whose keys are anything, such as run IDs, and whose values each pass the check. */
-function entriesOf(check: Check): Check {
+export function entriesOf(check: Check): Check {
     return (value, path, file) => {
         if (! isObject(value)) {
             invalid(file, path || 'the file', value, 'an object');
         }
-        for (const [ key, entry ] of Object.entries(value)) {
-            check(entry, at(path, key), file);
-        }
+        every(Object.entries(value).map(([ key, entry ]) => () => check(entry, at(path, key), file)));
     };
 }
 
@@ -94,6 +130,20 @@ export function parseJson(text: string, file: string): unknown {
 export function validated<T>(value: unknown, check: Check, file: string): T {
     check(value, '', file);
     return value as T;
+}
+
+/** What's wrong with `value`, the contents of `file`, by the check: every problem, or none. */
+export function problemsIn(value: unknown, check: Check, file: string): string[] {
+    try {
+        check(value, '', file);
+        return [];
+    }
+    catch (error) {
+        if (error instanceof Invalid) {
+            return [ ...error.problems ];
+        }
+        throw error;
+    }
 }
 
 function read<T>(file: string, check: Check): T {
