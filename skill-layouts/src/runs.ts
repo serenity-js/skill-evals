@@ -13,10 +13,12 @@ import { evalRoot, type Layout, LAYOUTS } from './layouts.ts';
 import { scoreLoading, type LoadingScore } from './loading.ts';
 import { agentFailureOf, type CommandResult, type Outcome, outcomeOf, probesFor, rescore, testWithRetries, unreachable } from './outcome.ts';
 import { addedLinesOf, withLocalApi } from './project.ts';
-import { readConfig, readRecord } from './records.ts';
+import { readConfig } from './records.ts';
+import { Results, type RunFiles, runFiles, writeJson } from './results.ts';
 import { promptFor, type Request, type Requests } from './requests.ts';
 import { type Agent, AGENTS, type PlannedRun, reviewPacket, type RunKey } from './review.ts';
 import { type AutoMode, parseCopilotStream, parseKiroStream, type SkillRead, type Tokens } from './streams.ts';
+import { Work } from './work.ts';
 
 export type Mode =
     | { mode: 'full' }
@@ -200,9 +202,6 @@ export function emptyJobDirectories(directory: string): void {
         rmSync(jobDirectory, { recursive: true, force: true });
     }
 }
-
-/** npm's cache, in <work>, which every agent's run shares */
-export const NPM_CACHE = 'npm-cache';
 
 /** The local API server is reached directly, never through a proxy the environment, or a sandbox, may name. */
 const NO_PROXY = { NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
@@ -399,7 +398,7 @@ export function pointAtLocalApi(directory: string, urls: ApiServerUrls): void {
  * committed, so the run's changes are a diff.
  */
 export function startRun(run: PlannedRun, request: Request, project: string, work: string, urls: ApiServerUrls): string {
-    const directory = join(work, 'runs', run.id);
+    const directory = new Work(work).run(run.id);
     rmSync(directory, { recursive: true, force: true });
     cpSync(project, directory, { recursive: true, verbatimSymlinks: true });
     if (request.fixture) {
@@ -532,14 +531,15 @@ export function spawnWithTimeout(
  */
 export function performRun(run: PlannedRun, request: Request, directory: string, results: string, work: string, config: Config, server: ApiServer): Promise<Spawned> {
     const { command, args } = agentCommand(run.agent, config.models[run.agent], promptFor(request, server.urls));
-    const homes = prepareAgentHomes(join(work, 'homes', run.id), join(work, NPM_CACHE));
-    mkdirSync(results, { recursive: true });
+    const homes = prepareAgentHomes(new Work(work).homes(run.id), new Work(work).npmCache);
+    const files = runFiles(results);
+    mkdirSync(files.directory, { recursive: true });
     const env = agentEnvironment(run.agent, homes, process.env, directory);
     return spawnWithTimeout(command, args, {
         cwd: directory,
         env,
-        stdout: join(results, 'stream.jsonl'),
-        stderr: join(results, 'agent.log'),
+        stdout: files.stream,
+        stderr: files.agentLog,
         timeoutMs: config.runTimeoutMinutes * 60_000,
     }).then(spawned => ({ ...spawned, environment: environmentNames(env), serverRequests: server.requests().length }));
 }
@@ -609,12 +609,12 @@ const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms
  * tsc, then npm test, with its log. When npm test fails, the harness probes the local API server, and when that doesn't
  * answer, the server failed, not the run's code, so scoring stops, rather than recording a network failure.
  */
-async function runChecks(runId: string, directory: string, results: string, request: Request, config: Config, server: Pick<ApiServer, 'urls' | 'requests' | 'output'>, options: CheckOptions) {
+async function runChecks(runId: string, directory: string, files: RunFiles, request: Request, config: Config, server: Pick<ApiServer, 'urls' | 'requests' | 'output'>, options: CheckOptions) {
     emptyJobDirectories(directory);
-    const tsc = resultOf('npx', [ 'tsc', '--noEmit' ], directory, join(results, 'tsc.log'), config.testTimeoutMinutes, options);
+    const tsc = resultOf('npx', [ 'tsc', '--noEmit' ], directory, files.tscLog, config.testTimeoutMinutes, options);
     let attempt = 0;
     const tests = await testWithRetries({
-        runTest: () => resultOf('npm', [ 'test' ], directory, join(results, `test.${ ++attempt }.log`), config.testTimeoutMinutes, options),
+        runTest: () => resultOf('npm', [ 'test' ], directory, files.testAttemptLog(++attempt), config.testTimeoutMinutes, options),
         probe: () => unreachable(probesFor(request.apis, server.urls)),
         wait,
         retries: 0,
@@ -622,7 +622,7 @@ async function runChecks(runId: string, directory: string, results: string, requ
     if (tests.networkFailure) {
         throw localServerDown(runId, tests.unreachable, server);
     }
-    writeFileSync(join(results, 'test.log'), tests.test.log);
+    writeFileSync(files.testLog, tests.test.log);
     return { tsc, ...tests };
 }
 
@@ -638,27 +638,27 @@ export async function rescoreNetworkFailures(
         { probe?: (urls: string[]) => Promise<string[]>, checks?: CheckOptions, runCommand?: RunCommand } = {},
 ): Promise<{ rescored: number, remaining: number, missing: string[] }> {
     const counts = { rescored: 0, remaining: 0, missing: [] as string[] };
+    const store = new Results(results);
     for (const run of planned) {
-        const file = join(results, 'runs', run.id, 'result.json');
-        const record = existsSync(file) ? readRecord(file) : undefined;
+        const record = store.hasResult(run.id) ? store.result(run.id) : undefined;
         if (record?.outcome !== 'network-failure') {
             continue;
         }
-        const directory = join(work, 'runs', run.id);
+        const directory = new Work(work).run(run.id);
         if (! existsSync(directory)) {
             counts.missing.push(run.id);
             counts.remaining++;
             continue;
         }
         const request = requests.get(run.request)!;
-        const runResults = join(results, 'runs', run.id);
+        const files = store.run(run.id);
         // on the evaluation's port, so the URLs in the run's test script and code, from its prompt, answer as they did
-        const rescored = await withApiServer(join(runResults, 'server.rescored.jsonl'), config.apiServer.port, async server => {
+        const rescored = await withApiServer(files.rescored.serverLog, config.apiServer.port, async server => {
             emptyJobDirectories(directory);
             const result = await rescore({
                 // next to the run's own logs, which stay as the run made them
-                runTsc: () => runCommand('npx', [ 'tsc', '--noEmit' ], directory, join(runResults, 'tsc.rescored.log'), config.testTimeoutMinutes),
-                runTest: () => runCommand('npm', [ 'test' ], directory, join(runResults, 'test.rescored.log'), config.testTimeoutMinutes),
+                runTsc: () => runCommand('npx', [ 'tsc', '--noEmit' ], directory, files.rescored.tscLog, config.testTimeoutMinutes),
+                runTest: () => runCommand('npm', [ 'test' ], directory, files.rescored.testLog, config.testTimeoutMinutes),
                 probe: () => probe(probesFor(request.apis, server.urls)),
                 wait,
             });
@@ -668,7 +668,7 @@ export async function rescoreNetworkFailures(
             return result;
         });
         counts.rescored++;
-        writeFileSync(file, `${ JSON.stringify({
+        store.saveResult(run.id, {
             ...record,
             outcome: rescored.outcome,
             tsc: { exitCode: rescored.tsc.exitCode },
@@ -678,30 +678,31 @@ export async function rescoreNetworkFailures(
             checksSandboxed: rescored.tsc.sandboxed === true && rescored.test.sandboxed === true,
             unreachable: rescored.unreachable,
             rescored: { at: new Date().toISOString(), outcome: rescored.outcome },
-        }, null, 2) }\n`);
+        });
     }
     return counts;
 }
 
 /** Scores a finished run: correctness, the skills it loaded, the conventions in its diff, and its cost. */
 export async function scoreRun(run: PlannedRun, request: Request, directory: string, results: string, performed: Spawned, config: Config, server: Pick<ApiServer, 'urls' | 'requests' | 'output'>, options: CheckOptions = {}): Promise<RunRecord> {
+    const files = runFiles(results);
     git(directory, [ 'add', '--all' ]);
     const diff = git(directory, [ 'diff', '--cached', 'HEAD' ]);
-    writeFileSync(join(results, 'diff.patch'), diff);
+    writeFileSync(files.diff, diff);
 
     const checks = checksOf(directory, git(directory, [ 'diff', '--cached', '--unified=0', 'HEAD' ]));
 
     // the stream first: a format the parser doesn't recognise, or another model, stops the evaluation before anything else
-    const stream = readFileSync(join(results, 'stream.jsonl'), 'utf8');
+    const stream = readFileSync(files.stream, 'utf8');
     const trace = run.agent === 'kiro' ? parseKiroStream(stream) : parseCopilotStream(stream, { timedOut: performed.timedOut });
     const model = modelProblem(config.models[run.agent], trace.models);
     if (model.stop) {
         throw new Error(`run ${ run.id }: ${ model.stop }`);
     }
     // the reviewer reads it in the review packet, for the suggestions the skills ask an agent to make in its report
-    writeFileSync(join(results, 'reply.md'), trace.reply ? `${ trace.reply }\n` : '');
+    writeFileSync(files.reply, trace.reply ? `${ trace.reply }\n` : '');
 
-    const { tsc, ...tests } = await runChecks(run.id, directory, results, request, config, server, options);
+    const { tsc, ...tests } = await runChecks(run.id, directory, files, request, config, server, options);
     const test = tests.test;
     const agentFailure = agentFailureOf({ exitCode: performed.exitCode, timedOut: performed.timedOut, completedToolCalls: trace.completedToolCalls });
 
@@ -736,7 +737,7 @@ export async function scoreRun(run: PlannedRun, request: Request, directory: str
         modelUnreported: model.unreported,
         agentVersion: agentVersionOf(trace, performed.agentVersion),
     };
-    writeFileSync(join(results, 'result.json'), `${ JSON.stringify(record, null, 2) }\n`);
+    writeJson(files.result, record);
     return record;
 }
 
@@ -772,12 +773,13 @@ export function reparseRecord(run: PlannedRun, request: Request, record: RunReco
     };
 }
 
-export function writeReviewPacket(run: PlannedRun, request: Request, results: string, review: string): void {
-    mkdirSync(review, { recursive: true });
-    const reply = join(results, 'reply.md');
-    writeFileSync(join(review, `${ run.id }.md`), reviewPacket({
+/** The run's review packet, from its diff, which it has to have, and its reply, where it has one. */
+export function writeReviewPacket(run: PlannedRun, request: Request, results: Results): void {
+    const files = results.run(run.id);
+    mkdirSync(results.review, { recursive: true });
+    writeFileSync(results.reviewPacket(run.id), reviewPacket({
         id: run.id, request: request.id, prompt: request.prompt,
-        diff: readFileSync(join(results, 'diff.patch'), 'utf8'),
-        reply: existsSync(reply) ? readFileSync(reply, 'utf8').trim() : '',
+        diff: readFileSync(files.diff, 'utf8'),
+        reply: files.read('reply')?.trim() ?? '',
     }));
 }

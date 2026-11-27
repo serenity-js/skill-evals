@@ -1,11 +1,11 @@
 // Reading the files the harness writes and reads back: mapping.json, each run's result.json, the reviewer's
-// scores.json, and config.json. Each is checked where it's read, so a missing or wrong field stops the harness with
+// scores.json, conditions.json and config.json. results.ts says where they are. Each is checked where it's read, so a missing or wrong field stops the harness with
 // the field's name and the file, rather than with a TypeError somewhere further on, or a wrong summary.
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { LAYOUTS } from './layouts.ts';
 import { AGENTS, type Agent, type PlannedRun, type ReviewScores } from './review.ts';
+import type { Conditions } from './conditions.ts';
 import type { Config, RunRecord } from './runs.ts';
 
 /** Checks a value, at a path in a file, and throws, naming both, when it isn't what the harness expects. */
@@ -136,6 +136,20 @@ const RECORD = fields(
 
 const SCORES = entriesOf(entriesOf(aString));
 
+// every field is optional, and checked when it's there: the recorded rounds have no shared.fixtures, results from
+// before the local API server have no shared.apiServer, and some from before agents were recorded have no agents
+const CONDITIONS = fields({ shared: fields({}, {
+    template: fields({ commit: aString }),
+    serenityJs: fields({ commit: aString }),
+    requests: aString,
+    skills: entriesOf(aString),
+    lockfiles: entriesOf(aString),
+    apiServer: fields({ port: aPort }),
+    fixtures: entriesOf(aString),
+}) }, {
+    agents: entriesOf(fields({ model: aString, version: aString })),
+});
+
 const CONFIG = fields({
     models: fields(Object.fromEntries(AGENTS.map(agent => [ agent, aString ]))),
     template: fields({ commit: aString }),
@@ -144,9 +158,9 @@ const CONFIG = fields({
     testTimeoutMinutes: minutes,
 });
 
-/** The runs planned in a mode's results, in its mapping.json, of the given agents only. */
-export function readPlan(results: string, agents: readonly Agent[] = AGENTS): PlannedRun[] {
-    return read<PlannedRun[]>(join(results, 'mapping.json'), PLAN).filter(run => agents.includes(run.agent));
+/** The runs planned in a mode's mapping.json, of the given agents only. */
+export function readMapping(file: string, agents: readonly Agent[] = AGENTS): PlannedRun[] {
+    return read<PlannedRun[]>(file, PLAN).filter(run => agents.includes(run.agent));
 }
 
 /** A run's result.json. */
@@ -157,6 +171,11 @@ export function readRecord(file: string): RunRecord {
 /** The reviewer's scores.json, or no scores, before there is one. Whether each is a verdict is the summary's to say. */
 export function readScores(file: string): ReviewScores {
     return existsSync(file) ? read<ReviewScores>(file, SCORES) : {};
+}
+
+/** A mode's conditions.json. */
+export function readConditions(file: string): Conditions {
+    return read<Conditions>(file, CONDITIONS);
 }
 
 /** The evaluation's config.json. */

@@ -7,23 +7,24 @@
 // skills, installs them into copies of the Mocha template, runs Kiro and GitHub Copilot on each request, and scores the
 // runs. See the README next to this directory's src/.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { ensurePortFree, withApiServer } from './api-server.ts';
-import { type AgentConditions, checkConditions, type Conditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles, savedLockfileOf } from './conditions.ts';
+import { type AgentConditions, checkConditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles } from './conditions.ts';
 import { type Check, CHECKLIST, conventionsScore } from './conventions.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
 import { compareResults } from './compare.ts';
-import { readPlan, readRecord, readScores } from './records.ts';
 import { checkReference, type ReferenceCheck, renderReferenceCheck } from './references.ts';
 import { loadRequests, type Request } from './requests.ts';
 import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, type RunKey, scoresTemplate } from './review.ts';
+import { Results } from './results.ts';
 import { renderSmoke, SMOKE_REQUEST, smokeChecks, smokeProblem } from './smoke.ts';
 import { type CheckOptions, checksOf, checksSandbox, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, resultOf, runsFor, sandboxProblems, scoreRun, startRun, writeReviewPacket } from './runs.ts';
 import { decideWhenComplete, renderSummary, type RunResult, summarise } from './summary.ts';
+import { Work } from './work.ts';
 
 export interface Arguments {
     mode: Mode;
@@ -154,7 +155,6 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
     };
 }
 
-const modeName = (mode: Mode) => mode.mode === 'held-back' ? `held-back-${ mode.layout }` : mode.mode;
 const log = (message: string) => console.log(`eval:skill-layouts: ${ message }`);
 
 /** What `command --version` prints, trimmed, or `not installed` when it can't start or fails. */
@@ -192,11 +192,12 @@ const keyOf = ({ agent, layout, request, repeat }: RunKey) => `${ agent } ${ lay
  * anything else.
  */
 export function checkPlan(mode: Mode, results: string): PlannedRun[] | undefined {
-    if (! existsSync(join(results, 'mapping.json'))) {
+    const store = new Results(results);
+    if (! store.hasPlan()) {
         return undefined;
     }
     const keys = runsFor(mode, loadRequests());
-    const planned = readPlan(results);
+    const planned = store.plan();
     if (planned.map(keyOf).sort().join('\n') !== keys.map(keyOf).sort().join('\n')) {
         throw new Error(`this --out was planned with ${ described(planned) }, not ${ described(keys) }: pass another --out`);
     }
@@ -213,13 +214,13 @@ export function planOf(mode: Mode, results: string): PlannedRun[] {
         return saved;
     }
     const planned = planRuns(runsFor(mode, loadRequests()));
-    writeFileSync(join(results, 'mapping.json'), `${ JSON.stringify(planned, null, 2) }\n`);
+    new Results(results).savePlan(planned);
     return planned;
 }
 
 async function evaluate(args: Arguments): Promise<void> {
-    const results = join(args.out, modeName(args.mode));
-    const review = join(results, 'review');
+    const store = Results.of(args.out, args.mode);
+    const results = store.directory;
     // a smoke run is a check, not part of an evaluation, so each starts afresh, with conditions of its own
     if (args.mode.mode === 'smoke' && ! args.prepareOnly) {
         rmSync(results, { recursive: true, force: true });
@@ -244,7 +245,7 @@ async function evaluate(args: Arguments): Promise<void> {
         await ensurePortFree(config.apiServer.port);
     }
     checkTemplateCommit(args.template, config.template.commit);
-    const conditionsFile = join(results, 'conditions.json');
+    const conditionsFile = store.conditionsFile;
     const versions = new Map(agents.map(agent => [ agent, versionOf(agent === 'kiro' ? 'kiro-cli' : 'copilot') ]));
     const agentConditions = (agent: Agent): AgentConditions => ({ model: config.models[agent], version: versions.get(agent)! });
     if (! args.prepareOnly) {
@@ -266,7 +267,7 @@ async function evaluate(args: Arguments): Promise<void> {
     const examples: string[] = [];
     for (const layout of layouts) {
         log(`installing layout ${ layout } into a copy of ${ args.template }`);
-        const project = prepareProject(layout, { directory: args.template, commit: config.template.commit }, layoutTarballs(layout, packed, args.work), args.work, savedLockfileOf(results, layout));
+        const project = prepareProject(layout, { directory: args.template, commit: config.template.commit }, layoutTarballs(layout, packed, args.work), args.work, store.savedLockfile(layout));
         projects.set(layout, project);
         examples.push(...checkExamples(layout, project, args.serenityJs, args.work).map(line => `layout ${ layout }, ${ line }`));
     }
@@ -289,27 +290,27 @@ async function evaluate(args: Arguments): Promise<void> {
     const planned = planOf(args.mode, results);
     const errors = new Map<string, string>();
     for (const [ index, run ] of planned.entries()) {
-        const runResults = join(results, 'runs', run.id);
-        if (! agents.includes(run.agent) || existsSync(join(runResults, 'result.json'))) {
+        const files = store.run(run.id);
+        if (! agents.includes(run.agent) || store.hasResult(run.id)) {
             continue;
         }
         recordAgentConditions(conditionsFile, run.agent, agentConditions(run.agent));
         const request = requests.get(run.request)!;
         log(`run ${ index + 1 } of ${ planned.length }: ${ run.id }`);
         // a server of the run's own, from before the agent starts until the harness's npm test is done
-        await withApiServer(join(runResults, 'server.jsonl'), config.apiServer.port, async server => {
+        await withApiServer(files.serverLog, config.apiServer.port, async server => {
             const directory = startRun(run, request, projects.get(run.layout)!, args.work, server.urls);
             // Kiro's stream reports no version, so the run records the one kiro-cli --version printed
-            const performed = { ...await performRun(run, request, directory, runResults, args.work, config, server), agentVersion: versions.get(run.agent) };
+            const performed = { ...await performRun(run, request, directory, files.directory, args.work, config, server), agentVersion: versions.get(run.agent) };
             if (args.mode.mode !== 'smoke') {
-                await scoreRun(run, request, directory, runResults, performed, config, server, sandbox.checks);
-                writeReviewPacket(run, request, runResults, review);
+                await scoreRun(run, request, directory, files.directory, performed, config, server, sandbox.checks);
+                writeReviewPacket(run, request, store);
                 return;
             }
             // the smoke run reports what stopped its scoring, rather than stopping
             try {
-                await scoreRun(run, request, directory, runResults, performed, config, server, sandbox.checks);
-                writeReviewPacket(run, request, runResults, review);
+                await scoreRun(run, request, directory, files.directory, performed, config, server, sandbox.checks);
+                writeReviewPacket(run, request, store);
             }
             catch (error) {
                 errors.set(run.id, (error as Error).message);
@@ -319,7 +320,7 @@ async function evaluate(args: Arguments): Promise<void> {
 
     if (args.mode.mode === 'smoke') {
         writeFixtures(results, fixtures);
-        reportSmoke(planned.filter(run => agents.includes(run.agent)), results, review, config, errors);
+        reportSmoke(planned.filter(run => agents.includes(run.agent)), store, config, errors);
         return;
     }
 
@@ -335,22 +336,20 @@ export async function finishEvaluation(
     results: string, work: string, planned: PlannedRun[],
     { agents, agent, sandbox, config }: { agents: readonly Agent[], agent?: Agent, sandbox: { problems: string[], checks: CheckOptions }, config: Config },
 ): Promise<void> {
-    const scores = join(results, 'review', 'scores.json');
-    if (! existsSync(scores)) {
-        mkdirSync(dirname(scores), { recursive: true });
-        writeFileSync(scores, `${ JSON.stringify(scoresTemplate(planned), null, 2) }\n`);
+    const store = new Results(results);
+    if (! store.hasScores()) {
+        store.saveScores(scoresTemplate(planned));
     }
     await rescoreResults(results, work, { agents, sandboxProblems: () => sandbox.problems, checks: sandbox.checks, config });
     summariseResults(results, { agent });
 }
 
 /** Prints the smoke run's checks, one line each, and fails, naming the failed checks, when any failed. */
-function reportSmoke(runs: PlannedRun[], results: string, review: string, config: Config, errors: Map<string, string>): void {
+function reportSmoke(runs: PlannedRun[], store: Results, config: Config, errors: Map<string, string>): void {
     const problems = runs.flatMap(run => {
-        const directory = join(results, 'runs', run.id);
-        const resultFile = join(directory, 'result.json');
-        const record = existsSync(resultFile) ? readRecord(resultFile) : undefined;
-        const packetFile = join(review, `${ run.id }.md`);
+        const files = store.run(run.id);
+        const record = store.hasResult(run.id) ? store.result(run.id) : undefined;
+        const packetFile = store.reviewPacket(run.id);
         const checks = smokeChecks({
             agent: run.agent,
             pin: config.models[run.agent],
@@ -367,7 +366,7 @@ function reportSmoke(runs: PlannedRun[], results: string, review: string, config
                 agentEnvironment: record.agentEnvironment ?? [],
                 serverRequests: record.serverRequests ?? { agent: 0, checks: 0 },
             },
-            logs: { tsc: existsSync(join(directory, 'tsc.log')), test: existsSync(join(directory, 'test.log')) },
+            logs: { tsc: existsSync(files.tscLog), test: existsSync(files.testLog) },
             resultSaved: record !== undefined,
             packet: existsSync(packetFile) ? readFileSync(packetFile, 'utf8') : undefined,
         });
@@ -387,20 +386,18 @@ function reportSmoke(runs: PlannedRun[], results: string, review: string, config
  * than the pin rewrites nothing, since that run should have stopped the evaluation.
  */
 export function reparseResults(results: string, { config = loadConfig(), agents = AGENTS }: { config?: Config, agents?: readonly Agent[] } = {}): void {
-    const planned = readPlan(results, agents);
+    const store = new Results(results);
+    const planned = store.plan(agents);
     const requests = requestsById();
     const reparsed = planned
-        .filter(run => existsSync(join(results, 'runs', run.id, 'result.json')) && existsSync(join(results, 'runs', run.id, 'stream.jsonl')))
-        .map(run => {
-            const directory = join(results, 'runs', run.id);
-            return { file: join(directory, 'result.json'), ...reparseRecord(run, requests.get(run.request)!, readRecord(join(directory, 'result.json')), readFileSync(join(directory, 'stream.jsonl'), 'utf8'), config) };
-        });
+        .filter(run => store.hasResult(run.id) && existsSync(store.run(run.id).stream))
+        .map(run => ({ id: run.id, ...reparseRecord(run, requests.get(run.request)!, store.result(run.id), readFileSync(store.run(run.id).stream, 'utf8'), config) }));
     const problems = reparsed.flatMap(({ problem }) => problem ?? []);
     if (problems.length > 0) {
         throw new Error(`nothing reparsed: ${ problems.join('; ') }`);
     }
-    for (const { file, record } of reparsed) {
-        writeFileSync(file, `${ JSON.stringify(record, null, 2) }\n`);
+    for (const { id, record } of reparsed) {
+        store.saveResult(id, record);
     }
     log(`${ reparsed.length } run(s) reparsed`);
 }
@@ -421,24 +418,25 @@ function changesBetween(saved: Check[], checks: Check[]): string[] {
  * writes the review packets again, with the checklist as it is. A diff that doesn't apply rescores nothing.
  */
 export function rescoreChecks(results: string, { work, template, agents = AGENTS }: { work: string, template: string, agents?: readonly Agent[] }): Array<{ id: string, changes: string[] }> {
-    const planned = readPlan(results, agents)
-        .filter(run => existsSync(join(results, 'runs', run.id, 'result.json')) && existsSync(join(results, 'runs', run.id, 'diff.patch')));
+    const store = new Results(results);
+    const workDirectory = new Work(work);
+    const planned = store.plan(agents)
+        .filter(run => store.hasResult(run.id) && existsSync(store.run(run.id).diff));
     const requests = requestsById();
-    const { commit } = (JSON.parse(readFileSync(join(results, 'conditions.json'), 'utf8')) as Conditions).shared.template;
+    const { commit } = templateOf(store);
     const problems: string[] = [];
     const rescored = planned.flatMap(run => {
-        const file = join(results, 'runs', run.id, 'result.json');
-        const diff = readFileSync(join(results, 'runs', run.id, 'diff.patch'), 'utf8');
-        const kept = join(work, 'runs', run.id);
+        const diff = readFileSync(store.run(run.id).diff, 'utf8');
+        const kept = workDirectory.run(run.id);
         const isKept = existsSync(join(kept, '.git'));
-        const directory = isKept ? kept : join(work, 'rescore-checks', run.id);
+        const directory = isKept ? kept : workDirectory.rescoredChecks(run.id);
         try {
             if (! isKept) {
                 rebuildWorkingCopy(directory, { template, commit, fixture: requests.get(run.request)!.fixture }, diff);
             }
-            const record = readRecord(file);
+            const record = store.result(run.id);
             const checks = checksOf(directory, diff);
-            return [ { run, file, record: { ...record, checks, checksRescored: new Date().toISOString() }, changes: changesBetween(record.checks, checks) } ];
+            return [ { run, record: { ...record, checks, checksRescored: new Date().toISOString() }, changes: changesBetween(record.checks, checks) } ];
         }
         catch (error) {
             problems.push(`run ${ run.id }: ${ (error as Error).message }`);
@@ -453,19 +451,17 @@ export function rescoreChecks(results: string, { work, template, agents = AGENTS
     if (problems.length > 0) {
         throw new Error(`nothing rescored: ${ problems.join('; ') }`);
     }
-    for (const { file, record } of rescored) {
-        writeFileSync(file, `${ JSON.stringify(record, null, 2) }\n`);
+    for (const { run, record } of rescored) {
+        store.saveResult(run.id, record);
     }
 
-    const review = join(results, 'review');
-    const scoresFile = join(review, 'scores.json');
-    const scores = readScores(scoresFile);
+    const scores = store.scores();
     for (const { run } of rescored) {
         scores[run.id] = { ...Object.fromEntries(CHECKLIST.map(item => [ item.id, '' ])), ...scores[run.id] };
-        writeReviewPacket(run, requests.get(run.request)!, join(results, 'runs', run.id), review);
+        writeReviewPacket(run, requests.get(run.request)!, store);
     }
     if (rescored.length > 0) {
-        writeFileSync(scoresFile, `${ JSON.stringify(Object.fromEntries(Object.entries(scores).sort(([ one ], [ other ]) => one.localeCompare(other))), null, 2) }\n`);
+        store.saveScores(Object.fromEntries(Object.entries(scores).sort(([ one ], [ other ]) => one.localeCompare(other))));
     }
     return rescored.map(({ run, changes }) => ({ id: run.id, changes }));
 }
@@ -475,9 +471,19 @@ export function rescoreChecks(results: string, { work, template, agents = AGENTS
  * recorded them, whichever agents this invocation runs.
  */
 export function writeFixtures(results: string, fixtures: object): void {
-    const conditions = join(results, 'conditions.json');
-    const agents = existsSync(conditions) ? (JSON.parse(readFileSync(conditions, 'utf8')) as Conditions).agents : {};
-    writeFileSync(join(results, 'fixtures.json'), `${ JSON.stringify({ ...fixtures, agents }, null, 2) }\n`);
+    const store = new Results(results);
+    const conditions = store.conditions();
+    const agents = conditions ? conditions.agents : {};
+    store.saveFixtures({ ...fixtures, agents });
+}
+
+/** The template commit the runs started from, as conditions.json recorded it. */
+function templateOf(store: Results): { commit: string } {
+    const template = store.conditions()?.shared?.template;
+    if (template === undefined) {
+        throw new Error(`${ store.conditionsFile }: ${ store.conditions() ? 'shared.template is missing' : "doesn't exist" }`);
+    }
+    return template;
 }
 
 /**
@@ -498,15 +504,14 @@ export async function rescoreResults(
     // the runs' test scripts, and the URLs in their code, name the port they were made with; results from before the
     // local API server have none, and call the public APIs, so rescoring them against the local server would score
     // the public APIs' latency, not their code
-    const conditions = join(results, 'conditions.json');
-    const made = existsSync(conditions) ? (JSON.parse(readFileSync(conditions, 'utf8')) as { shared: Partial<Conditions['shared']> }).shared.apiServer : undefined;
+    const made = new Results(results).conditions()?.shared.apiServer;
     if (made === undefined) {
         throw new Error("nothing rescored: these results come from before the local API server, so their runs' code calls the public APIs, and can't be rescored against it");
     }
     if (made.port !== config.apiServer.port) {
         throw new Error(`nothing rescored: the runs were made with the local API server on port ${ made.port }, but config.json sets ${ config.apiServer.port }, so the URLs in their code wouldn't answer: put the port back`);
     }
-    const planned = readPlan(results, agents);
+    const planned = new Results(results).plan(agents);
     const { rescored, remaining, missing } = await rescoreNetworkFailures(planned, requestsById(), results, work, config, { checks });
     log(`${ rescored } network failure(s) scored again; ${ remaining } not rescored${ missing.length > 0 ? `, ${ missing.length } of them without a run directory in ${ work }` : '' }`);
 }
@@ -518,13 +523,10 @@ export async function rescoreResults(
  * and the decision waits for all of their runs.
  */
 export function summariseResults(results: string, { agent }: { agent?: Agent } = {}): void {
-    const planned = readPlan(results, agent ? [ agent ] : AGENTS);
-    const scores = readScores(join(results, 'review', 'scores.json'));
-    const done = new Set(existsSync(join(results, 'runs')) ? readdirSync(join(results, 'runs')) : []);
-
-    const scored = planned
-        .filter(run => done.has(run.id) && existsSync(join(results, 'runs', run.id, 'result.json')))
-        .map(run => ({ run, record: readRecord(join(results, 'runs', run.id, 'result.json')) }));
+    const store = new Results(results);
+    const planned = store.plan(agent ? [ agent ] : AGENTS);
+    const scores = store.scores();
+    const scored = store.scored(planned);
 
     const runResults: RunResult[] = scored.map(({ run, record }) => ({
         ...run,
@@ -548,8 +550,7 @@ export function summariseResults(results: string, { agent }: { agent?: Agent } =
         .reduce((total, { scored: items, disagreed }) => ({ scored: total.scored + items, disagreed: total.disagreed + disagreed }), { scored: 0, disagreed: 0 });
     const summary = summarise(runResults);
     const decision = decideWhenComplete(summary, { planned: planned.length, scored: runResults.length, agent });
-    writeFileSync(join(results, 'summary.json'), `${ JSON.stringify({ ...(agent ? { agent } : {}), runs: runResults.length, planned: planned.length, reviewed, review, summary, decision }, null, 2) }\n`);
-    writeFileSync(join(results, 'summary.md'), [
+    store.saveSummary({ ...(agent ? { agent } : {}), runs: runResults.length, planned: planned.length, reviewed, review, summary, decision }, [
         renderSummary(summary, decision),
         agent
             ? `${ agent }'s runs only: ${ runResults.length } of its ${ planned.length } planned runs scored; ${ reviewed } reviewed.`
@@ -557,7 +558,7 @@ export function summariseResults(results: string, { agent }: { agent?: Agent } =
         `The reviewer's verdict replaces the AST patterns' for every item they scored. They disagreed with the patterns on ${ review.disagreed } of the ${ review.scored } items they scored.`,
         '',
     ].join('\n'));
-    log(`${ runResults.length } of ${ planned.length } runs${ agent ? ` of ${ agent }` : '' } scored, ${ reviewed } reviewed: ${ join(results, 'summary.md') }`);
+    log(`${ runResults.length } of ${ planned.length } runs${ agent ? ` of ${ agent }` : '' } scored, ${ reviewed } reviewed: ${ store.summaryMarkdown }`);
 }
 
 /**
@@ -577,18 +578,19 @@ export async function checkReferences(
     }
     await ensurePortFree(config.apiServer.port);
     checkTemplateCommit(args.template, config.template.commit);
-    const results = join(args.out, 'check-references');
+    const store = Results.ofReferences(args.out);
+    const results = store.directory;
     mkdirSync(results, { recursive: true });
 
     log(`packing the packages in ${ args.serenityJs }`);
     const packed = packPackages(args.serenityJs, args.work);
     log(`installing layout none into a copy of ${ args.template }`);
-    const project = prepareProject('none', { directory: args.template, commit: config.template.commit }, layoutTarballs('none', packed, args.work), args.work, savedLockfileOf(results, 'none'));
+    const project = prepareProject('none', { directory: args.template, commit: config.template.commit }, layoutTarballs('none', packed, args.work), args.work, store.savedLockfile('none'));
 
     const { requests, heldBack } = loadRequests();
     const checks: ReferenceCheck[] = [];
     for (const request of [ ...requests, ...heldBack ]) {
-        const check = await withApiServer(join(results, request.id, 'server.jsonl'), config.apiServer.port, server =>
+        const check = await withApiServer(store.referenceServerLog(request.id), config.apiServer.port, server =>
             checkReference(request, {
                 project, work: args.work, results, urls: server.urls, testTimeoutMinutes: config.testTimeoutMinutes,
                 runCommand: (command, commandArgs, cwd, logFile, timeoutMinutes) => resultOf(command, commandArgs, cwd, logFile, timeoutMinutes, sandbox.checks),
@@ -606,23 +608,23 @@ export async function checkReferences(
 if (import.meta.main) {
     try {
         const args = parseArguments(process.argv.slice(2), process.cwd());
+        const store = Results.of(args.out, args.mode);
         if (args.compareOnly) {
-            const results = join(args.out, modeName(args.mode));
-            writeFileSync(join(results, 'compare.md'), compareResults(results, { agent: args.agent }));
-            log(`the layouts compared, request by request: ${ join(results, 'compare.md') }`);
+            store.saveCompare(compareResults(store.directory, { agent: args.agent }));
+            log(`the layouts compared, request by request: ${ store.compareMarkdown }`);
         }
         else if (args.checkReferencesOnly) {
             await checkReferences(args);
         }
         else if (args.summariseOnly) {
-            summariseResults(join(args.out, modeName(args.mode)), { agent: args.agent });
+            summariseResults(store.directory, { agent: args.agent });
         }
         else if (args.reparseOnly) {
-            reparseResults(join(args.out, modeName(args.mode)), { agents: args.agent ? [ args.agent ] : AGENTS });
-            summariseResults(join(args.out, modeName(args.mode)), { agent: args.agent });
+            reparseResults(store.directory, { agents: args.agent ? [ args.agent ] : AGENTS });
+            summariseResults(store.directory, { agent: args.agent });
         }
         else if (args.rescoreChecksOnly) {
-            const results = join(args.out, modeName(args.mode));
+            const results = store.directory;
             const rescored = rescoreChecks(results, { work: args.work, template: args.template, agents: args.agent ? [ args.agent ] : AGENTS });
             for (const { id, changes } of rescored) {
                 log(`run ${ id }: ${ changes.length > 0 ? changes.join(', ') : 'no change' }`);
@@ -632,8 +634,8 @@ if (import.meta.main) {
         }
         else if (args.rescoreOnly) {
             const sandbox = checksSandbox(process.platform, { unsandboxed: args.unsandboxed });
-            await rescoreResults(join(args.out, modeName(args.mode)), args.work, { sandboxProblems: () => sandbox.problems, checks: sandbox.checks, agents: args.agent ? [ args.agent ] : AGENTS });
-            summariseResults(join(args.out, modeName(args.mode)), { agent: args.agent });
+            await rescoreResults(store.directory, args.work, { sandboxProblems: () => sandbox.problems, checks: sandbox.checks, agents: args.agent ? [ args.agent ] : AGENTS });
+            summariseResults(store.directory, { agent: args.agent });
         }
         else {
             await evaluate(args);

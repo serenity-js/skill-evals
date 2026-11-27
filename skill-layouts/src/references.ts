@@ -9,6 +9,8 @@ import type { ApiServerUrls } from './api-server.ts';
 import { evalRoot } from './layouts.ts';
 import { fillInUrls, type Request } from './requests.ts';
 import { emptyJobDirectories, pointAtLocalApi, resultOf, type RunCommand } from './runs.ts';
+import { Results } from './results.ts';
+import { Work } from './work.ts';
 
 export const REFERENCE_SOLUTIONS = join(evalRoot, 'fixtures', 'reference-solutions');
 
@@ -94,7 +96,7 @@ function writeFiles(directory: string, files: Map<string, string>, urls: ApiServ
  */
 export async function checkReference(request: Request, { project, work, results, urls, testTimeoutMinutes, solutions = REFERENCE_SOLUTIONS, runCommand = resultOf }: ReferenceCheckOptions): Promise<ReferenceCheck> {
     const failed = (problem: string): ReferenceCheck => ({ request: request.id, ok: false, problem });
-    const logs = join(results, request.id);
+    const logs = new Results(results).referenceLogs(request.id);
     const log = (name: string) => join(logs, name);
 
     let files: Map<string, string>;
@@ -107,7 +109,7 @@ export async function checkReference(request: Request, { project, work, results,
         return failed((error as Error).message);
     }
 
-    const directory = join(work, 'references', request.id);
+    const directory = new Work(work).reference(request.id);
     rmSync(directory, { recursive: true, force: true });
     rmSync(logs, { recursive: true, force: true });
     mkdirSync(logs, { recursive: true });

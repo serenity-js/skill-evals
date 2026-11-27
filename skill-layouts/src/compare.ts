@@ -1,11 +1,8 @@
 // What --compare writes: compare.md, a section per request that sets the layouts' runs side by side, so that a pilot's
 // results can be read before there's enough of them for the decision rule. It only reads the results.
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import { CHECKLIST, type ChecklistItem, exercises, type Verdict } from './conventions.ts';
 import { LAYOUTS } from './layouts.ts';
-import { readPlan, readRecord, readScores } from './records.ts';
+import { Results } from './results.ts';
 import { type Agent, AGENTS, type PlannedRun, type ReviewScores } from './review.ts';
 import { modelsOf, type RunRecord } from './runs.ts';
 import { RUNS_PER_LAYOUT_FOR_A_DECISION, runsCount, tooSmallToDecide } from './summary.ts';
@@ -16,8 +13,6 @@ interface Scored {
 }
 
 const NO_REPLY = '(none: the agent said nothing after its last tool call)';
-
-const readIf = (path: string) => existsSync(path) ? readFileSync(path, 'utf8') : undefined;
 
 const share = (count: number, of: number) => `${ count } of ${ of }`;
 
@@ -60,15 +55,15 @@ function shownRunOf(scored: Scored[]): Scored | undefined {
         || one.run.id.localeCompare(other.run.id))[0];
 }
 
-function sideBySide(results: string, layouts: string[], shown: Map<string, Scored | undefined>): string[] {
+function sideBySide(results: Results, layouts: string[], shown: Map<string, Scored | undefined>): string[] {
     const cell = (layout: string) => {
         const scored = shown.get(layout);
         if (! scored) {
             return [ '<td valign="top">', '', '(no run with a result)', '', '</td>' ];
         }
-        const directory = join(results, 'runs', scored.run.id);
-        const diff = readIf(join(directory, 'diff.patch'))?.trimEnd();
-        const reply = readIf(join(directory, 'reply.md'))?.trim();
+        const files = results.run(scored.run.id);
+        const diff = files.read('diff')?.trimEnd();
+        const reply = files.read('reply')?.trim();
         return [
             '<td valign="top">',
             '',
@@ -100,14 +95,12 @@ function sideBySide(results: string, layouts: string[], shown: Map<string, Score
  * checklist item the request exercises passed, and each other item a run's code applied to, the skill files its runs loaded, and one run's diff per layout, side by
  * side, with the agent's reply.
  */
-export function compareResults(results: string, { agent }: { agent?: Agent } = {}): string {
+export function compareResults(directory: string, { agent }: { agent?: Agent } = {}): string {
+    const results = new Results(directory);
     // a plan has runs of every agent; with an agent, only its runs, since a round run with --agent leaves the others without results for good
-    const planned = readPlan(results, agent ? [ agent ] : AGENTS);
-    const scores = readScores(join(results, 'review', 'scores.json'));
-    const scored: Scored[] = planned.flatMap(run => {
-        const result = join(results, 'runs', run.id, 'result.json');
-        return existsSync(result) ? [ { run, record: readRecord(result) } ] : [];
-    });
+    const planned = results.plan(agent ? [ agent ] : AGENTS);
+    const scores = results.scores();
+    const scored: Scored[] = results.scored(planned);
     const requests = [ ...new Set(planned.map(run => run.request)) ]
         .sort((one, other) => Number(one.split('-')[0]) - Number(other.split('-')[0]));
 

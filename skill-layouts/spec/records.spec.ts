@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { summariseResults } from '../src/cli.ts';
+import { rescoreChecks, summariseResults, writeFixtures } from '../src/cli.ts';
 import { compareResults } from '../src/compare.ts';
-import { readPlan, readRecord, readScores } from '../src/records.ts';
+import { readConditions, readRecord, readScores } from '../src/records.ts';
+import { readPlan } from '../src/results.ts';
 import type { PlannedRun } from '../src/review.ts';
 import { loadConfig } from '../src/runs.ts';
 
@@ -117,6 +118,40 @@ describe('the files the harness reads', () => {
         });
     });
 
+    describe('readConditions', () => {
+
+        const shared = {
+            template: { commit: '2315e1e' }, serenityJs: { commit: '93273d6' }, requests: 'sha256:aaaa', skills: { b: 'sha256:2222' },
+            lockfiles: { b: 'sha256:6666' }, apiServer: { port: 4170 }, fixtures: { precision: 'sha256:7777' },
+        };
+
+        it('reads conditions.json, as the evaluation saves it', () => {
+            const file = write('conditions.json', { shared, agents: { kiro: { model: 'claude-sonnet-5.5', version: 'kiro-cli 3.5.0' } } });
+
+            expect(readConditions(file)).toEqual({ shared, agents: { kiro: { model: 'claude-sonnet-5.5', version: 'kiro-cli 3.5.0' } } });
+        });
+
+        it('reads those of earlier versions of the harness: without fixtures, as the recorded rounds have, without the local API server, or without agents', () => {
+            const { fixtures: _fixtures, ...withoutFixtures } = shared;
+
+            expect(readConditions(write('conditions.json', { shared: withoutFixtures, agents: {} }))).toEqual({ shared: withoutFixtures, agents: {} });
+            expect(readConditions(write('conditions.json', { shared: { template: { commit: 'abc' }, requests: 'sha256:aaaa' }, agents: {} })))
+                .toEqual({ shared: { template: { commit: 'abc' }, requests: 'sha256:aaaa' }, agents: {} });
+            expect(readConditions(write('conditions.json', { shared }))).toEqual({ shared });
+        });
+
+        it.each([
+            [ 'no shared conditions', { agents: {} }, 'shared is missing' ],
+            [ 'a template that is not an object', { shared: { ...shared, template: 'abc' } }, 'shared.template is "abc", not an object' ],
+            [ 'a port that is not one', { shared: { ...shared, apiServer: { port: '4170' } } }, 'shared.apiServer.port is "4170", not a port, 1 to 65535' ],
+            [ "an agent's conditions without a version", { shared, agents: { kiro: { model: 'claude-sonnet-5.5' } } }, 'agents.kiro.version is missing' ],
+        ])('names the field and the file for %s', (_, content, problem) => {
+            const file = write('conditions.json', content);
+
+            expect(() => readConditions(file)).toThrow(`${ file }: ${ problem }`);
+        });
+    });
+
     describe('loadConfig', () => {
 
         const config = { models: { kiro: 'claude-sonnet-5.5', copilot: 'auto' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, runTimeoutMinutes: 30, testTimeoutMinutes: 10 };
@@ -152,6 +187,28 @@ describe('the files the harness reads', () => {
             const file = write('mapping.json', [ { ...kiroRun, layout: undefined } ]);
 
             expect(() => compareResults(directory)).toThrow(`${ file }: [0].layout is missing`);
+        });
+
+        it('--rescore-checks names the field and the file of a conditions.json it cannot use, rather than failing with a TypeError', () => {
+            write('mapping.json', [ kiroRun ]);
+            const file = write('conditions.json', { shared: { template: 'abc' }, agents: {} });
+
+            expect(() => rescoreChecks(directory, { work: join(directory, 'work'), template: join(directory, 'template') }))
+                .toThrow(`${ file }: shared.template is "abc", not an object`);
+        });
+
+        it('--rescore-checks says when conditions.json has no template commit for the working copies it rebuilds', () => {
+            write('mapping.json', [ kiroRun ]);
+            const file = write('conditions.json', { shared: { requests: 'sha256:aaaa' }, agents: {} });
+
+            expect(() => rescoreChecks(directory, { work: join(directory, 'work'), template: join(directory, 'template') }))
+                .toThrow(`${ file }: shared.template is missing`);
+        });
+
+        it('the evaluation names the field and the file of a conditions.json it cannot use, when it writes fixtures.json', () => {
+            const file = write('conditions.json', { shared: {}, agents: { kiro: 'claude-sonnet-5.5' } });
+
+            expect(() => writeFixtures(directory, { examples: [] })).toThrow(`${ file }: agents.kiro is "claude-sonnet-5.5", not an object`);
         });
 
         it("--summarise names the file of a scores.json it cannot use", () => {

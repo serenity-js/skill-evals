@@ -3,10 +3,12 @@
 // a time. A resumed evaluation that would run under other conditions, such as another build of the framework, another
 // model, or different requests or skills, is refused, so the summary never mixes runs from different experiments.
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 
 import { evalRoot, type Layout } from './layouts.ts';
+import { readConditions } from './records.ts';
+import { Results, writeJson } from './results.ts';
 import type { Agent } from './review.ts';
 
 /** What every run of the evaluation shares, whichever agent it's of. */
@@ -78,13 +80,8 @@ export function changedConditions(saved: object, now: object, prefix = ''): stri
         .map(name => `${ name }: ${ before.get(name) ?? 'none' }, now ${ after.get(name) ?? 'none' }`);
 }
 
-function read(file: string): Conditions {
-    return JSON.parse(readFileSync(file, 'utf8')) as Conditions;
-}
-
-function write(file: string, conditions: Conditions): void {
-    writeFileSync(file, `${ JSON.stringify(conditions, null, 2) }\n`);
-}
+const read = readConditions;
+const write = (file: string, conditions: Conditions) => writeJson(file, conditions);
 
 /**
  * Saves the shared conditions the first time, and refuses to go on under other conditions after that: other shared
@@ -129,7 +126,7 @@ export function recordAgentConditions(file: string, agent: Agent, conditions: Ag
 
 /** Where the lockfile npm generated the first time a layout was prepared for an --out is saved, in its results. */
 export function savedLockfileOf(results: string, layout: Layout): string {
-    return join(results, 'layouts', layout, 'package-lock.json');
+    return new Results(results).savedLockfile(layout);
 }
 
 /** The hash of each layout's saved lockfile, leaving out the layouts that haven't been prepared for this --out yet. */

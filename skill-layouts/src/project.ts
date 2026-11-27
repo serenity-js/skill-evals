@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
 import { type Layout, PACKAGES_WITH_SKILLS, skillsDirectoryOf } from './layouts.ts';
+import { Work } from './work.ts';
 
 /** The packages the template depends on, all packed from the same build, so the template uses one build of the framework. */
 export const PACKAGES = [ 'assertions', 'console-reporter', 'core', 'html-reporter', 'mocha', 'rest' ] as const;
@@ -185,7 +186,7 @@ export interface Packed {
 
 /** `npm pack`s every package the template depends on, in a compiled serenity-js clone. */
 export function packPackages(clone: string, out: string): Packed {
-    const destination = join(out, 'tarballs', 'packed');
+    const destination = new Work(out).tarballs('packed');
     rmSync(destination, { recursive: true, force: true });
     mkdirSync(destination, { recursive: true });
     const tarballs = Object.fromEntries(PACKAGES.map(pkg => {
@@ -206,7 +207,7 @@ function opaqueNameOf(layout: Layout): string {
 
 /** The packed tarballs, with the `skills/` of core and mocha replaced by the layout's. */
 export function layoutTarballs(layout: Layout, packed: Packed, out: string): Record<string, string> {
-    const destination = join(out, 'tarballs', opaqueNameOf(layout));
+    const destination = new Work(out).tarballs(opaqueNameOf(layout));
     rmSync(destination, { recursive: true, force: true });
     mkdirSync(destination, { recursive: true });
 
@@ -269,11 +270,10 @@ export function installDependencies(project: string, savedLockfile: string, npm:
  * one copy of `@serenity-js/core`, installed from the tarball, and the layout's skills linked for both agents.
  */
 export function prepareProject(layout: Layout, template: { directory: string, commit: string }, tarballs: Record<string, string>, out: string, savedLockfile: string): string {
-    const project = join(out, 'layouts', layout, 'project');
+    const { project, templateArchive: archive } = new Work(out).layout(layout);
     rmSync(project, { recursive: true, force: true });
     mkdirSync(project, { recursive: true });
 
-    const archive = join(out, 'layouts', layout, 'template.tar');
     run('git', [ 'archive', '--output', archive, template.commit ], template.directory);
     run('tar', [ '-xf', archive, '-C', project ], project);
     rmSync(archive);
@@ -312,7 +312,7 @@ function problemsWithCore(project: string): string[] {
  * dependencies, like `@serenity-js/rest` and Mocha. The copy is thrown away, so the runs' projects stay as installed.
  */
 export function checkExamples(layout: Layout, project: string, clone: string, out: string): string[] {
-    const copy = join(out, 'layouts', layout, 'examples');
+    const copy = new Work(out).layout(layout).examples;
     rmSync(copy, { recursive: true, force: true });
     cpSync(project, copy, { recursive: true, verbatimSymlinks: true });
 
