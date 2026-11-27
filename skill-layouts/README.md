@@ -418,14 +418,16 @@ any. A specs directory holds:
 - `projects/<project>/`: `project.json`, with the `template`'s repository and commit, and optionally the
   `replacements`, `directories` and `ignored` paths; and optionally `fixture/`, which is copied over the template
 - `rules/<rule>/`: `README.md`, whose frontmatter has the rule's `title`, its `source`, as
-  `<package>/<skill>/<path>#<section>`, and optionally `followsTheProject`; and its examples. With the README alone,
-  the judge scores the rule. With `rule.yml`, an ast-grep rule that finds violations, and optionally `applies.yml`, one
-  that finds the code the rule applies to, the patterns do
+  `<package>/<skill>/<path>#<section>`, and optionally `followsTheProject`; and its examples. A pattern rule also has
+  `rule.yml`, an ast-grep rule that finds violations, and `applies.yml`, one that finds the code the rule applies to.
+  A rule the judge scores has the README alone. `--validate` refuses a rule with one of `rule.yml` and `applies.yml`
+  but not the other
 
 The patterns' verdict depends only on the lines a change added, as `conventions.ts` decides it: fail when a violation
-is on one, pass otherwise when code the rule applies to is, and n/a otherwise. So a rule without `applies.yml` can
-fail, but never pass. `rule.yml` and `applies.yml` are ast-grep's rule configuration, for TypeScript, with the rule's
-directory as `id`, or the directory and `.applies`; `@ast-grep/napi` runs their `rule`, `constraints` and `utils`.
+is on one, pass otherwise when code the rule applies to is, and n/a otherwise. Without `applies.yml`, a rule could
+fail, but never pass, which is why it's required. `rule.yml` and `applies.yml` are ast-grep's rule configuration, for
+TypeScript, with the rule's directory as `id`, or the directory and `.applies`; `@ast-grep/napi` runs their `rule`,
+`constraints` and `utils`.
 
 `followsTheProject` exempts what the project already did before the change:
 

@@ -50,7 +50,7 @@ describe('a specs directory', () => {
                 source: '@example/greetings/writing-greetings/SKILL.md#comparing-values',
                 followsTheProject: 'file',
             });
-            expect(rules.get('strict-equality')!.patterns?.canPass()).toBe(true);
+            expect(rules.get('strict-equality')!.patterns).toBeDefined();
             expect(rules.get('descriptive-names')!.patterns).toBeUndefined();
             expect(rules.get('descriptive-names')!.text).toMatch(/^A name of one or two letters/);
         });
@@ -234,8 +234,8 @@ describe('a specs directory', () => {
             [ "applies.yml's id isn't the rule's", () => edit('rules/strict-equality/applies.yml', content => content.replace('strict-equality.applies', 'strict-equality')), [
                 'rules/strict-equality/applies.yml: id is "strict-equality", not strict-equality.applies, the rule\'s directory and .applies',
             ] ],
-            [ 'applies.yml has no rule.yml', () => write('rules/descriptive-names/applies.yml', 'id: descriptive-names.applies\nlanguage: TypeScript\nrule:\n  kind: identifier\n'), [
-                'rules/descriptive-names/applies.yml has no rule.yml next to it, whose violations it says where the rule applies',
+            [ 'a rule has applies.yml without rule.yml', () => write('rules/descriptive-names/applies.yml', 'id: descriptive-names.applies\nlanguage: TypeScript\nrule:\n  kind: identifier\n'), [
+                'rules/descriptive-names has applies.yml, but no rule.yml: a pattern rule has both, and a rule the judge scores has README.md only',
             ] ],
             [ 'a rule has no fail/ example', () => rmSync(path('rules/descriptive-names/fail'), { recursive: true }), [
                 'rules/descriptive-names has no fail/ example: every rule has at least one pass/ and one fail/',
@@ -252,8 +252,8 @@ describe('a specs directory', () => {
             [ "a pattern rule's example gets another verdict", () => write('rules/strict-equality/pass/compares-strictly.ts', "export const isAnonymous = (name: string) => name != '';\n"), [
                 "rules/strict-equality/pass/compares-strictly.ts: the rule's verdict is fail, from compares-strictly.ts:1: name != '', not pass",
             ] ],
-            [ 'a rule without applies.yml has a pass/ example', () => rmSync(path('rules/strict-equality/applies.yml')), [
-                "rules/strict-equality/pass/compares-strictly.ts: the rule's verdict is n/a, not pass; without applies.yml, the rule can't pass",
+            [ 'a rule has rule.yml without applies.yml', () => rmSync(path('rules/strict-equality/applies.yml')), [
+                'rules/strict-equality has rule.yml, but no applies.yml: a pattern rule has both, and a rule the judge scores has README.md only',
             ] ],
         ])('%s', (_, breakIt, problems) => {
             breakIt();

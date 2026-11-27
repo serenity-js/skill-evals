@@ -51,15 +51,6 @@ describe('rules', () => {
             expect(equality.verdictOn(Change.ofNewFile('notes.md', "name == ''")).verdict).toBe(Verdict.notApplicable);
         });
 
-        it('fails or leaves n/a, without applies.yml, since nothing says what the rule applies to', () => {
-            const violations = RulePatterns.of({ violations: LOOSE });
-
-            expect(violations.verdictOn(Change.ofNewFile('a.ts', "x == ''")).verdict).toBe(Verdict.fail);
-            expect(violations.verdictOn(Change.ofNewFile('a.ts', "x === ''")).verdict).toBe(Verdict.notApplicable);
-            expect(violations.canPass()).toBe(false);
-            expect(equality.canPass()).toBe(true);
-        });
-
         it("takes ast-grep's utils and constraints, as rule.yml has them", () => {
             const letDeclarations = RulePatterns.of({
                 violations: {
@@ -67,6 +58,7 @@ describe('rules', () => {
                     utils: { declaration: { kind: 'lexical_declaration', has: { kind: 'variable_declarator', has: { field: 'name', pattern: '$NAME' } } } },
                     constraints: { NAME: { regex: '^tmp' } },
                 },
+                applies: { rule: { kind: 'lexical_declaration', regex: '^const\\s' } },
             });
 
             expect(letDeclarations.verdictOn(Change.ofNewFile('a.ts', 'let tmpName = 1;')).verdict).toBe(Verdict.fail);

@@ -1,7 +1,7 @@
 // The rules of a specs directory, and the verdicts their patterns give. A rule is rules/<rule>/: a README.md, whose
-// frontmatter says what the rule asks for and which practice it comes from, and whose text is the rule and why; with
-// rule.yml, an ast-grep rule that finds violations, and optionally applies.yml, one that finds the code the rule
-// applies to. A rule with the README alone is the judge's to score. Every rule has examples of each verdict it gives,
+// frontmatter says what the rule asks for and which practice it comes from, and whose text is the rule and why. A
+// pattern rule also has rule.yml, an ast-grep rule that finds violations, and applies.yml, one that finds the code the
+// rule applies to, without which it could never pass. A rule with the README alone is the judge's to score. Every rule has examples of each verdict it gives,
 // in pass/, fail/ and n-a/, which the same code that scores runs checks.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, relative, sep } from 'node:path';
@@ -114,23 +114,18 @@ const EXEMPTIONS: Record<FollowsTheProject, (violations: readonly Finding[], had
  */
 export class RulePatterns {
 
-    static of({ violations, applies, followsTheProject }: { violations: NapiConfig, applies?: NapiConfig, followsTheProject?: FollowsTheProject }): RulePatterns {
+    static of({ violations, applies, followsTheProject }: { violations: NapiConfig, applies: NapiConfig, followsTheProject?: FollowsTheProject }): RulePatterns {
         return new RulePatterns(violations, applies, followsTheProject);
     }
 
     readonly violations: NapiConfig;
-    readonly applies: NapiConfig | undefined;
+    readonly applies: NapiConfig;
     readonly followsTheProject: FollowsTheProject | undefined;
 
-    private constructor(violations: NapiConfig, applies: NapiConfig | undefined, followsTheProject: FollowsTheProject | undefined) {
+    private constructor(violations: NapiConfig, applies: NapiConfig, followsTheProject: FollowsTheProject | undefined) {
         this.violations = violations;
         this.applies = applies;
         this.followsTheProject = followsTheProject;
-    }
-
-    /** Whether anything can pass the rule: only with applies.yml, which says what the rule applies to */
-    canPass(): boolean {
-        return this.applies !== undefined;
     }
 
     verdictOn(change: Change): PatternVerdict {
@@ -144,7 +139,7 @@ export class RulePatterns {
         if (bad.length > 0) {
             return PatternVerdict.of(Verdict.fail, bad.map(String));
         }
-        const good = this.applies ? found(this.applies).filter(finding => finding.isAdded) : [];
+        const good = found(this.applies).filter(finding => finding.isAdded);
         return good.length > 0 ? PatternVerdict.of(Verdict.pass, good.map(String)) : PatternVerdict.of(Verdict.notApplicable, []);
     }
 }
@@ -231,6 +226,8 @@ const RULE_ENTRIES: Entries = {
 };
 const EXAMPLE_ENTRIES: Entries = { before: 'directory', after: 'directory', 'request.md': 'file', 'reply.md': 'file' };
 
+const PATTERN_OR_JUDGE = 'a pattern rule has both, and a rule the judge scores has README.md only';
+
 /** The frontmatter of a rule's README.md */
 export interface RuleFrontmatter {
     /** One line: what the rule asks for */
@@ -302,8 +299,10 @@ export class Rule {
         const hasRule = existsSync(join(directory, 'rule.yml'));
         const violations = isFile(join(directory, 'rule.yml')) ? Rule.ruleFile(join(directory, 'rule.yml'), `${ shown }/rule.yml`, name, "the rule's directory", problems) : undefined;
         const hasApplies = existsSync(join(directory, 'applies.yml'));
-        if (hasApplies && ! hasRule) {
-            problems.push(`${ shown }/applies.yml has no rule.yml next to it, whose violations it says where the rule applies`);
+        if (hasRule !== hasApplies) {
+            problems.push(hasRule
+                ? `${ shown } has rule.yml, but no applies.yml: ${ PATTERN_OR_JUDGE }`
+                : `${ shown } has applies.yml, but no rule.yml: ${ PATTERN_OR_JUDGE }`);
         }
         const applies = isFile(join(directory, 'applies.yml')) && hasRule
             ? Rule.ruleFile(join(directory, 'applies.yml'), `${ shown }/applies.yml`, `${ name }.applies`, "the rule's directory and .applies", problems)
@@ -320,7 +319,7 @@ export class Rule {
             .map(({ directory: kind }) => `${ shown } has no ${ kind }/ example: every rule has at least one pass/ and one fail/`));
 
         // a rule whose files are wrong isn't run on its examples, since the verdicts would only repeat what's wrong with it
-        const patterns = violations && frontmatter && problems.length === 0
+        const patterns = violations && applies && frontmatter && problems.length === 0
             ? RulePatterns.of({ violations, applies, followsTheProject: frontmatter.followsTheProject })
             : undefined;
         return new Rule(name, frontmatter, text, patterns, examples, problems);
@@ -426,8 +425,7 @@ export class Rule {
             if (verdict.verdict === example.expected) {
                 return [];
             }
-            const hint = example.expected === Verdict.pass && ! patterns.canPass() ? "; without applies.yml, the rule can't pass" : '';
-            return [ `${ example.path }: the rule's verdict is ${ verdict }, not ${ example.expected }${ hint }` ];
+            return [ `${ example.path }: the rule's verdict is ${ verdict }, not ${ example.expected }` ];
         });
     }
 }
