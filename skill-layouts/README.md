@@ -318,12 +318,13 @@ against the checklist. The judge's verdicts don't count anywhere until they've b
 by item, on the rounds the reviewer scored. `--calibrate` makes that comparison. Nothing else uses the judge yet.
 
 ```bash
-pnpm run eval:skill-layouts -- --calibrate --rounds ~/rounds/focus/pilot,~/rounds/copilot-check/pilot,~/rounds/regression/pilot \
+pnpm run eval:skill-layouts -- --calibrate --rounds "$HOME/rounds/focus/pilot,$HOME/rounds/copilot-check/pilot,$HOME/rounds/regression/pilot" \
     --template ~/Projects/serenity-js-mocha-template --out ~/skill-layouts-calibration
 ```
 
-`--rounds` takes the results of rounds the reviewer scored: each a mode's directory, with its `mapping.json`,
-`conditions.json`, `review/scores.json` and `runs/`. The round's name is its directory's, or its parent's for a mode,
+`--rounds` takes the results of rounds the reviewer scored, separated by commas, so name each with `$HOME` or an
+absolute path: a shell expands `~` only at the start of a word, so only the first round's would be. Each is a mode's
+directory, with its `mapping.json`, `conditions.json`, `review/scores.json` and `runs/`. The round's name is its directory's, or its parent's for a mode,
 such as `focus` for `focus/pilot`. `--template` is a clone of the template with the rounds' commits. The judge is the
 agent and model `config.json` pins in `judge`, Kiro with `claude-sonnet-5.5`, so it needs `KIRO_API_KEY`.
 

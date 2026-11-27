@@ -445,6 +445,18 @@ describe('calibrating the judge', () => {
                 .toEqual({ agent: 'kiro', model: 'claude-opus-5.5', version: 'kiro-cli 3.6.0' });
         });
 
+        // a shell expands ~ only at the start of a word, so a second round named with ~ would be looked for under the current directory
+        it("shows a command in the README whose every round is named with $HOME or an absolute path, which a shell passes on as they are", () => {
+            const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8');
+            const commands = [ ...readme.matchAll(/```bash\n([\s\S]*?)```/g) ].map(block => block[1].replaceAll('\\\n', ' '));
+            const rounds = commands.flatMap(command => [ ...command.matchAll(/--rounds\s+("[^"]*"|\S+)/g) ].map(match => match[1].replaceAll('"', '')));
+
+            expect(rounds).not.toHaveLength(0);
+            for (const round of rounds.flatMap(list => list.split(','))) {
+                expect(round).toMatch(/^(\$HOME\/|\/)/);
+            }
+        });
+
         it('refuses two rounds of the same name', async () => {
             await expect(calibrate({ ...options(fakeJudge().spawn), rounds: [ round, join(root, 'other', 'regression') ] }))
                 .rejects.toThrow('two rounds are named regression');
