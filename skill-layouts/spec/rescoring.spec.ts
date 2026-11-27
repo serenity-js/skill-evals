@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { finishEvaluation, reparseResults, rescoreResults, summariseResults } from '../src/cli.ts';
 import { freePort, startApiServer, urlsOf } from '../src/api-server.ts';
 import { unreachable } from '../src/outcome.ts';
-import { agentVersionOf, CommandDidNotStart, commandDidNotStart, type Config, rebuildWorkingCopy, rescoreNetworkFailures, resultOf, type RunRecord, scoreRun, startRun } from '../src/runs.ts';
+import { CommandDidNotStart, commandDidNotStart } from '../src/child-processes.ts';
+import { agentVersionOf, type Config, rebuildWorkingCopy, rescoreNetworkFailures, resultOf, type RunRecord, scoreRun, startRun } from '../src/runs.ts';
 import { promptFor } from '../src/requests.ts';
 import type { PlannedRun } from '../src/review.ts';
 

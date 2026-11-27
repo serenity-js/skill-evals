@@ -1,11 +1,11 @@
 // Builds what the runs start from: tarballs of the Serenity/JS packages with each layout's skills, and a copy of the
 // Mocha template that installs them, with the skills linked for Kiro and Copilot as `npx skills` links them.
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
+import { run as runToCompletion } from './child-processes.ts';
 import { type Layout, PACKAGES_WITH_SKILLS, skillsDirectoryOf } from './layouts.ts';
 import { Work } from './work.ts';
 
@@ -34,7 +34,8 @@ interface Manifest {
 const posix = (path: string) => path.split(sep).join('/');
 
 function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = {}): string {
-    return execFileSync(command, args, { cwd, encoding: 'utf8', env: { ...process.env, ...env }, stdio: [ 'ignore', 'pipe', 'pipe' ] });
+    // the user's whole environment, credentials included: a known issue, in the README
+    return runToCompletion(command, args, { cwd, env: { ...process.env, ...env }, stdio: [ 'ignore', 'pipe', 'pipe' ] });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

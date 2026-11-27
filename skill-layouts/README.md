@@ -769,6 +769,9 @@ These are to be fixed in the next pull requests, each with a failing spec first:
 - **Preparing the layouts' projects gives npm your whole environment.** `project.ts` runs `npm install`, `npm pack`
   and `npx skills` with every variable you've exported, credentials included, and `npm install` runs the install
   scripts of the projects' dependencies with them. They should get the basics the checks get, and no credentials
+- **The checks are only sandboxed on macOS.** On Linux, `tsc` and `npm test` only run given `--unsandboxed`, with your
+  access to your files and the network. Linux needs a backend of its own, such as bubblewrap, as another
+  `ChecksSandbox` in `sandbox.ts`, whose specs CI's Linux job would run
 
 ## Developing the harness
 

@@ -6,12 +6,12 @@
 // Evaluates how a package's skills should be laid out: packs the Serenity/JS packages, gives them each layout's
 // skills, installs them into copies of the Mocha template, runs Kiro and GitHub Copilot on each request, and scores the
 // runs. See the README next to this directory's src/.
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { ensurePortFree, withApiServer } from './api-server.ts';
+import { run } from './child-processes.ts';
 import { type AgentConditions, checkConditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles } from './conditions.ts';
 import { type Check, CHECKLIST, conventionsScore } from './conventions.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
@@ -22,7 +22,8 @@ import { loadRequests, type Request } from './requests.ts';
 import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, type RunKey, scoresTemplate } from './review.ts';
 import { Results } from './results.ts';
 import { renderSmoke, SMOKE_REQUEST, smokeChecks, smokeProblem } from './smoke.ts';
-import { type CheckOptions, checksOf, checksSandbox, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, resultOf, runsFor, sandboxProblems, scoreRun, startRun, writeReviewPacket } from './runs.ts';
+import { type CheckOptions, checksOf, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, resultOf, runsFor, scoreRun, startRun, writeReviewPacket } from './runs.ts';
+import { checksSandbox, sandboxProblems } from './sandbox.ts';
 import { decideWhenComplete, renderSummary, type RunResult, summarise } from './summary.ts';
 import { Work } from './work.ts';
 
@@ -160,7 +161,7 @@ const log = (message: string) => console.log(`eval:skill-layouts: ${ message }`)
 /** What `command --version` prints, trimmed, or `not installed` when it can't start or fails. */
 export function versionOf(command: string): string {
     try {
-        return execFileSync(command, [ '--version' ], { encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'ignore' ] }).trim();
+        return run(command, [ '--version' ], { stdio: [ 'ignore', 'pipe', 'ignore' ] }).trim();
     }
     catch {
         return 'not installed';
@@ -252,7 +253,7 @@ async function evaluate(args: Arguments): Promise<void> {
         const requestOf = requestsById();
         checkConditions(conditionsFile, {
             template: { commit: config.template.commit },
-            serenityJs: { commit: execFileSync('git', [ 'rev-parse', 'HEAD' ], { cwd: args.serenityJs, encoding: 'utf8' }).trim() },
+            serenityJs: { commit: run('git', [ 'rev-parse', 'HEAD' ], { cwd: args.serenityJs }).trim() },
             requests: hashOf(join(evalRoot, 'requests.json')),
             skills: Object.fromEntries(layouts.map(layout => [ layout, hashOf(join(evalRoot, 'layouts', layout)) ])),
             lockfiles: lockfileHashes(results, layouts),

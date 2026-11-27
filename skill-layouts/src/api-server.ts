@@ -1,11 +1,11 @@
 // The harness's side of the local API server: it starts server/server.ts on the port config.json sets, in a process of
 // its own, which keeps answering while the harness's own checks block on tsc and npm test, and reads the requests it
 // logged. One port for the whole evaluation means every run, and every rescore of it, calls the same URLs.
-import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 
+import { startDaemon } from './child-processes.ts';
 import { evalRoot } from './layouts.ts';
 
 export interface ApiServerUrls {
@@ -66,26 +66,19 @@ export function ensurePortFree(port: number): Promise<void> {
 export function startApiServer({ port, log }: { port: number, log: string }): Promise<ApiServer> {
     mkdirSync(dirname(log), { recursive: true });
     writeFileSync(log, '');
-    const child = spawn(process.execPath, [ join(evalRoot, 'server', 'server.ts'), '--port', String(port), '--log', log ], { stdio: [ 'ignore', 'pipe', 'pipe' ] });
-    const exited = new Promise<void>(resolve => child.on('exit', () => resolve()));
-    let output = '';
-    child.stdout.on('data', chunk => output += chunk);
-    child.stderr.on('data', chunk => output += chunk);
+    const server = startDaemon(process.execPath, [ join(evalRoot, 'server', 'server.ts'), '--port', String(port), '--log', log ]);
     return new Promise((resolve, reject) => {
-        child.on('exit', code => reject(output.includes('EADDRINUSE')
+        server.exited.then(code => reject(server.output().includes('EADDRINUSE')
             ? portInUse(port)
-            : new Error(`the local API server didn't start on port ${ port }: it exited with ${ code }${ output ? `: ${ output.trim() }` : '' }`)));
-        child.stdout.on('data', chunk => {
-            if (String(chunk).includes(`listening on ${ port }`)) {
+            : new Error(`the local API server didn't start on port ${ port }: it exited with ${ code }${ server.output() ? `: ${ server.output().trim() }` : '' }`)));
+        server.onOutput((chunk, stream) => {
+            if (stream === 'stdout' && chunk.includes(`listening on ${ port }`)) {
                 resolve({
                     port,
                     urls: urlsOf(port),
                     requests: () => readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as ServerRequest),
-                    output: () => output,
-                    stop: () => {
-                        child.kill();
-                        return exited;
-                    },
+                    output: () => server.output(),
+                    stop: () => server.stop(),
                 });
             }
         });

@@ -1,12 +1,9 @@
 // One run: a copy of the layout's project, the agent working on one request in it, and the scoring of what it did.
-import { execFileSync, spawn } from 'node:child_process';
-import { homedir, tmpdir } from 'node:os';
-import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import type { Writable } from 'node:stream';
-import { finished } from 'node:stream/promises';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { type ApiServer, type ApiServerUrls, localServerDown, serverRequestsOf, withApiServer } from './api-server.ts';
+import { complete, type Finished, run, runBuffer, spawnWithTimeout } from './child-processes.ts';
 import { checkConventions, type Check, type ProjectFiles, type SourceFile } from './conventions.ts';
 import { ALLOWED_HOSTS, type AgentHomes, credentialProblems, personalSkillsProblems, prepareAgentHomes } from './homes.ts';
 import { evalRoot, type Layout, LAYOUTS } from './layouts.ts';
@@ -17,6 +14,7 @@ import { readConfig } from './records.ts';
 import { Results, type RunFiles, runFiles, writeJson } from './results.ts';
 import { promptFor, type Request, type Requests } from './requests.ts';
 import { type Agent, AGENTS, type PlannedRun, reviewPacket, type RunKey } from './review.ts';
+import { checksSandboxFor, SANDBOX_EXEC, sandboxPathsOf } from './sandbox.ts';
 import { type AutoMode, parseCopilotStream, parseKiroStream, type SkillRead, type Tokens } from './streams.ts';
 import { Work } from './work.ts';
 
@@ -220,68 +218,6 @@ export function agentEnvironment(agent: Agent, homes: AgentHomes, env: NodeJS.Pr
 }
 
 /**
- * What the harness's checks may touch: they write only in `writable`, the run's directory and TMPDIR, and read nothing
- * in `home` outside `writable` and `readable`, npm's cache and the Node.js installation.
- */
-export interface SandboxPaths {
-    writable: string[];
-    readable: string[];
-    home: string;
-}
-
-// Seatbelt matches real paths, e.g. /private/var rather than /var, so the paths that exist are resolved
-const realPathOf = (path: string) => existsSync(path) ? realpathSync(path) : resolve(path);
-
-/**
- * The paths of the checks in `directory`, with the environment they run with: npm's cache is npm_config_cache, or
- * ~/.npm, and Node.js is installed in the prefix of `execPath`, which may be in HOME, as with nvm.
- */
-export function sandboxPathsOf(env: NodeJS.ProcessEnv, directory: string, execPath: string = process.execPath): SandboxPaths {
-    const home = realPathOf(env.HOME ?? homedir());
-    return {
-        writable: [ realPathOf(directory), realPathOf(env.TMPDIR ?? tmpdir()) ],
-        readable: [ realPathOf(env.npm_config_cache ?? join(home, '.npm')), realPathOf(dirname(dirname(execPath))) ],
-        home,
-    };
-}
-
-/**
- * A macOS sandbox profile that allows everything but: writing outside `writable`, and the null and terminal devices;
- * reading in `home` outside `writable` and `readable`, though a path's metadata can be read, so that a command looked
- * up on a PATH with directories in HOME is still found; and the network, apart from localhost, and the system's DNS
- * resolver, so that `localhost` resolves.
- */
-export function sandboxProfile({ writable, readable, home }: SandboxPaths): string {
-    for (const path of [ ...writable, ...readable, home ]) {
-        if (/["\\()\n]/.test(path)) {
-            throw new Error(`${ path } can't be put in a sandbox profile`);
-        }
-    }
-    const subpaths = (paths: string[]) => paths.map(path => `(subpath "${ path }")`).join(' ');
-    return [
-        '(version 1)',
-        '(allow default)',
-        '(deny file-write*)',
-        `(allow file-write* ${ subpaths(writable) } (literal "/dev/null") (regex #"^/dev/tty") (regex #"^/dev/fd/"))`,
-        `(deny file-read* ${ subpaths([ home ]) })`,
-        `(allow file-read-metadata ${ subpaths([ home ]) })`,
-        `(allow file-read* ${ subpaths([ ...writable, ...readable ]) })`,
-        '(deny network*)',
-        '(allow network-outbound (remote ip "localhost:*"))',
-        '(allow network-bind network-inbound (local ip "localhost:*"))',
-        '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))',
-    ].join('\n');
-}
-
-/** macOS's sandbox-exec, which the harness's checks run under */
-export const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
-
-/** The harness's command, under sandbox-exec, with the profile of the run's paths. */
-export function sandboxed(command: string, args: string[], paths: SandboxPaths, sandboxExec: string = SANDBOX_EXEC): { command: string, args: string[] } {
-    return { command: sandboxExec, args: [ '-p', sandboxProfile(paths), command, ...args ] };
-}
-
-/**
  * What keeps the runs from starting, for the agents about to run only: their pins and credentials, Copilot's personal
  * skills, and the sandbox of the harness's checks. So a Kiro-only pilot starts without anything of Copilot's.
  */
@@ -296,39 +232,6 @@ export function preflightProblems(
         ...personalSkillsProblems(agents, home),
         ...sandbox(),
     ];
-}
-
-// with the profile the checks get, so a profile sandbox-exec can't apply refuses the runs before they start
-const startSandboxExec = () => execFileSync('/usr/bin/sandbox-exec', [ '-p', sandboxProfile(sandboxPathsOf(process.env, tmpdir())), '/usr/bin/true' ], { stdio: 'pipe' });
-
-/**
- * Whether the harness can sandbox its checks here: sandbox-exec is macOS's, and can't start inside another sandbox.
- * Without it, the checks only run given --unsandboxed.
- */
-export function sandboxProblems(platform: NodeJS.Platform, start: () => unknown = startSandboxExec): string[] {
-    if (platform !== 'darwin') {
-        return [ `the harness runs tsc and npm test under sandbox-exec, which ${ platform } doesn't have: pass --unsandboxed to run them without a sandbox` ];
-    }
-    try {
-        start();
-        return [];
-    }
-    catch (error) {
-        const { stderr, message } = error as { stderr?: Buffer | string, message: string };
-        return [ `the harness runs tsc and npm test under sandbox-exec, which can't start here (${ String(stderr ?? '').trim() || message }): run the evaluation from your own terminal, outside any sandbox, or pass --unsandboxed to run them without one` ];
-    }
-}
-
-/**
- * How the harness's checks run: under sandbox-exec where it can start, whether or not it's given --unsandboxed; and,
- * where it can't, without a sandbox, given --unsandboxed, or not at all, with what refuses them.
- */
-export function checksSandbox(platform: NodeJS.Platform, { unsandboxed, start = startSandboxExec }: { unsandboxed: boolean, start?: () => unknown }): { problems: string[], checks: { unsandboxed: boolean } } {
-    const problems = sandboxProblems(platform, start);
-    if (problems.length === 0) {
-        return { problems, checks: { unsandboxed: false } };
-    }
-    return unsandboxed ? { problems: [], checks: { unsandboxed: true } } : { problems, checks: { unsandboxed: false } };
 }
 
 /** A pin that takes whichever model the agent picks, for a robustness check, rather than a model of its own. */
@@ -357,7 +260,7 @@ export function modelsOf(record: { models?: string[], model?: string }): string[
 // ---------------------------------------------------------------------------------------------------------------------
 
 const git = (cwd: string, args: string[]) =>
-    execFileSync('git', [ '-c', 'user.name=skill-layouts', '-c', 'user.email=skill-layouts@localhost', '-c', 'commit.gpgsign=false', ...args ], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    run('git', [ '-c', 'user.name=skill-layouts', '-c', 'user.email=skill-layouts@localhost', '-c', 'commit.gpgsign=false', ...args ], { cwd, maxBuffer: 64 * 1024 * 1024 });
 
 const isTypeScript = (path: string) => path.endsWith('.ts') && ! path.split('/').includes('node_modules');
 
@@ -420,7 +323,7 @@ export function startRun(run: PlannedRun, request: Request, project: string, wor
 export function rebuildWorkingCopy(directory: string, { template, commit, fixture }: { template: string, commit: string, fixture: string | undefined }, diff: string): void {
     rmSync(directory, { recursive: true, force: true });
     mkdirSync(directory, { recursive: true });
-    execFileSync('tar', [ '-x', '-C', directory ], { input: execFileSync('git', [ 'archive', commit ], { cwd: template, maxBuffer: 256 * 1024 * 1024 }) });
+    runBuffer('tar', [ '-x', '-C', directory ], { input: runBuffer('git', [ 'archive', commit ], { cwd: template, maxBuffer: 256 * 1024 * 1024 }) });
     if (fixture) {
         cpSync(join(evalRoot, 'fixtures', fixture), directory, { recursive: true });
     }
@@ -434,7 +337,7 @@ export function rebuildWorkingCopy(directory: string, { template, commit, fixtur
     const patch = join(directory, '.git', 'run.patch');
     writeFileSync(patch, diff);
     try {
-        execFileSync('git', [ 'apply', '--include=*.ts', patch ], { cwd: directory, stdio: 'pipe' });
+        runBuffer('git', [ 'apply', '--include=*.ts', patch ], { cwd: directory, stdio: 'pipe' });
     }
     catch (error) {
         const reason = String((error as { stderr?: Buffer }).stderr ?? '').trim().split('\n')[0];
@@ -442,11 +345,7 @@ export function rebuildWorkingCopy(directory: string, { template, commit, fixtur
     }
 }
 
-export interface Spawned {
-    exitCode: number;
-    durationMs: number;
-    /** The agent didn't finish in time, so its process group was stopped */
-    timedOut: boolean;
+export interface Spawned extends Finished {
     /** The names of the variables the agent's environment held, without their values */
     environment?: string[];
     /** How many requests the local API server had logged when the agent finished */
@@ -458,71 +357,6 @@ export interface Spawned {
 /** The agent's version: the one its stream reports, as Copilot's does, or else the installed one, as for Kiro. */
 export function agentVersionOf(trace: { agentVersion: string }, installed: string | undefined): string {
     return trace.agentVersion || installed || '';
-}
-
-// how long the agent gets to stop after SIGTERM, before its process group is killed, and how long its output then
-// gets to close, before the harness stops waiting for it
-const GRACE_MS = 10_000;
-
-/**
- * Runs a command with its output in files, and stops it when it runs out of time. The command starts a process group
- * of its own, so stopping it stops whatever it started too, such as the test runs and servers of an agent.
- */
-export function spawnWithTimeout(
-    command: string,
-    args: string[],
-    { cwd, env, stdout, stderr, timeoutMs, graceMs = GRACE_MS, openOutput = path => createWriteStream(path) }:
-        { cwd: string, env: NodeJS.ProcessEnv, stdout: string, stderr: string, timeoutMs: number, graceMs?: number, openOutput?: (path: string) => Writable },
-): Promise<Spawned> {
-    const started = Date.now();
-    const child = spawn(command, args, { cwd, env, detached: true, stdio: [ 'ignore', 'pipe', 'pipe' ] });
-    const outputs = [ child.stdout.pipe(openOutput(stdout)), child.stderr.pipe(openOutput(stderr)) ];
-
-    let timedOut = false;
-    const signalGroup = (signal: NodeJS.Signals) => {
-        try {
-            process.kill(-child.pid!, signal);
-        }
-        catch {
-            // the group has already gone
-        }
-    };
-    let exitCode: number | undefined;
-    let kill: NodeJS.Timeout | undefined;
-    let abandon: NodeJS.Timeout | undefined;
-    // a process that left the group can keep the pipes open for ever, so in the end the harness closes them itself
-    const stopWaiting = () => {
-        child.stdout.destroy();
-        child.stderr.destroy();
-        outputs.forEach(output => output.end());
-    };
-    const timeout = setTimeout(() => {
-        timedOut = true;
-        signalGroup('SIGTERM');
-        kill = setTimeout(() => signalGroup('SIGKILL'), graceMs);
-        abandon = setTimeout(stopWaiting, 2 * graceMs);
-    }, timeoutMs);
-
-    child.on('exit', code => {
-        exitCode = code ?? 1;
-        clearTimeout(timeout);
-        if (timedOut) {
-            // whatever the agent started and left behind in its group
-            signalGroup('SIGKILL');
-            clearTimeout(kill);
-        }
-    });
-    const closed = new Promise<number>((resolve, reject) => {
-        child.on('error', reject);
-        child.on('close', code => {
-            clearTimeout(abandon);
-            resolve(code ?? exitCode ?? 1);
-        });
-    });
-
-    // scoring reads the output files, so they have to be complete, not just the agent finished
-    return Promise.all([ closed, ...outputs.map(output => finished(output)) ])
-        .then(([ exitCode ]) => ({ exitCode, durationMs: Date.now() - started, timedOut }));
 }
 
 /**
@@ -544,19 +378,6 @@ export function performRun(run: PlannedRun, request: Request, directory: string,
     }).then(spawned => ({ ...spawned, environment: environmentNames(env), serverRequests: server.requests().length }));
 }
 
-/** A command that couldn't start says nothing about the run's code, so it stops the scoring rather than failing the run. */
-export class CommandDidNotStart extends Error {}
-
-export function commandDidNotStart(command: string, reason: string): CommandDidNotStart {
-    return new CommandDidNotStart(`couldn't start ${ command }: ${ reason }`);
-}
-
-// the errors of a command that couldn't start at all, rather than one that ran and failed
-const SPAWN_ERRORS = new Set([ 'ENOENT', 'EACCES', 'EPERM', 'ENOEXEC', 'ENOTDIR' ]);
-
-// sandbox-exec exits with 71 and says why, on standard error, when it can't apply the profile or start the command
-const SANDBOX_REFUSAL = /^sandbox-exec: .*$/m;
-
 export type RunCommand = (command: string, args: string[], cwd: string, logFile: string, timeoutMinutes: number) => CommandResult;
 
 export interface CheckOptions {
@@ -574,31 +395,20 @@ export interface CheckOptions {
  */
 export function resultOf(command: string, args: string[], cwd: string, logFile: string, timeoutMinutes: number, { env = process.env, unsandboxed = false, sandboxExec = SANDBOX_EXEC }: CheckOptions = {}): CommandResult {
     const environment = testEnvironment(env, cwd);
-    const inSandbox = unsandboxed ? { command, args } : sandboxed(command, args, sandboxPathsOf(environment, cwd), sandboxExec);
     const isSandboxed = ! unsandboxed;
-    let result: CommandResult;
-    try {
-        result = { exitCode: 0, log: execFileSync(inSandbox.command, inSandbox.args, {
-            cwd, env: environment, encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'pipe' ], timeout: timeoutMinutes * 60_000, maxBuffer: 64 * 1024 * 1024,
-        }), sandboxed: isSandboxed };
+    const done = complete(command, args, {
+        cwd, env: environment, timeoutMs: timeoutMinutes * 60_000, maxBuffer: 64 * 1024 * 1024,
+        ...(isSandboxed ? { sandbox: { checks: checksSandboxFor(process.platform, { executable: sandboxExec }), paths: sandboxPathsOf(environment, cwd) } } : {}),
+    });
+    // a command killed by its timeout ran, and failed; that's the run's to answer for
+    if (done.timedOut) {
+        const log = `${ done.stdout }${ done.stderr }\n${ command } ${ args.join(' ') } timed out after ${ timeoutMinutes * 60 } s${ done.signal ? `, and was stopped with ${ done.signal }` : '' }\n`;
+        writeFileSync(logFile, log);
+        return { exitCode: done.status ?? 124, log, sandboxed: isSandboxed };
     }
-    catch (error) {
-        const { status, signal, stdout = '', stderr = '', code, message } = error as { status: number | null, signal: NodeJS.Signals | null, stdout?: string, stderr?: string, code?: string, message: string };
-        // a command killed by its timeout ran, and failed; that's the run's to answer for
-        if (code === 'ETIMEDOUT' || signal) {
-            const log = `${ stdout }${ stderr }\n${ command } ${ args.join(' ') } timed out after ${ timeoutMinutes * 60 } s${ signal ? `, and was stopped with ${ signal }` : '' }\n`;
-            writeFileSync(logFile, log);
-            return { exitCode: status ?? 124, log, sandboxed: isSandboxed };
-        }
-        if (code !== undefined && SPAWN_ERRORS.has(code)) {
-            throw commandDidNotStart(command, message);
-        }
-        const refusal = isSandboxed && status === 71 ? SANDBOX_REFUSAL.exec(stderr)?.[0] : undefined;
-        if (refusal) {
-            throw commandDidNotStart(command, refusal);
-        }
-        result = { exitCode: status ?? 1, log: `${ stdout }${ stderr }`, sandboxed: isSandboxed };
-    }
+    const result: CommandResult = done.failed
+        ? { exitCode: done.status ?? 1, log: `${ done.stdout }${ done.stderr }`, sandboxed: isSandboxed }
+        : { exitCode: 0, log: done.stdout, sandboxed: isSandboxed };
     writeFileSync(logFile, result.log);
     return result;
 }

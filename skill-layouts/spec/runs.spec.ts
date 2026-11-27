@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArguments, versionOf } from '../src/cli.ts';
 import { LAYOUTS } from '../src/layouts.ts';
 import { RUNS_PER_LAYOUT_FOR_A_DECISION } from '../src/summary.ts';
-import { agentCommand, agentEnvironment, agentsToRun, environmentNames, loadConfig, modelProblem, preflightProblems, checksSandbox, resultOf, runsFor, sandboxed, sandboxPathsOf, sandboxProblems, sandboxProfile, spawnWithTimeout, testEnvironment } from '../src/runs.ts';
+import { spawnWithTimeout } from '../src/child-processes.ts';
+import { agentCommand, agentEnvironment, agentsToRun, environmentNames, loadConfig, modelProblem, preflightProblems, resultOf, runsFor, testEnvironment } from '../src/runs.ts';
+import { checksSandbox, checksSandboxFor, SANDBOX_EXEC, sandboxed, sandboxPathsOf, sandboxProblems, sandboxProfile } from '../src/sandbox.ts';
 
 describe('loadConfig', () => {
     it('sets one port for the local API server, for the whole evaluation, so every run gets the same prompts and URLs', () => {
@@ -529,6 +531,28 @@ describe('sandboxed', () => {
             .toEqual([ '/Users/me/.npm', '/Users/me/.nvm/versions/node/v24.15.0' ]);
     });
 
+    describe('checksSandboxFor', () => {
+
+        it("is sandbox-exec, which wraps the command with the profile of the run's paths", () => {
+            expect(checksSandboxFor('darwin').wrap('npm', [ 'test' ], paths)).toEqual({ command: SANDBOX_EXEC, args: [ '-p', sandboxProfile(paths), 'npm', 'test' ] });
+            expect(checksSandboxFor('darwin', { executable: '/tmp/sandbox-exec' }).wrap('npm', [ 'test' ], paths).command).toBe('/tmp/sandbox-exec');
+        });
+
+        it('is sandbox-exec on every platform so far, which says where it is not there', () => {
+            expect(checksSandboxFor('linux', { start: () => undefined }).problems()).toEqual(sandboxProblems('linux'));
+            expect(checksSandboxFor('darwin', { start: () => undefined }).problems()).toEqual([]);
+        });
+
+        it("tells sandbox-exec's refusal, an exit with 71 and its reason on standard error, from a command that failed", () => {
+            const { refusalOf } = checksSandboxFor('darwin');
+
+            expect(refusalOf(71, 'sandbox-exec: sandbox_apply: Operation not permitted\n')).toBe('sandbox-exec: sandbox_apply: Operation not permitted');
+            expect(refusalOf(71, 'npm ERR! something else\n')).toBeUndefined();
+            expect(refusalOf(1, 'sandbox-exec: sandbox_apply: Operation not permitted\n')).toBeUndefined();
+            expect(refusalOf(null, '')).toBeUndefined();
+        });
+    });
+
     it("refuses to start the runs when sandbox-exec can't start, as inside another sandbox, unless it's given --unsandboxed", () => {
         const refused = () => { throw new Error('sandbox-exec: sandbox_apply: Operation not permitted'); };
 
@@ -555,7 +579,7 @@ describe('sandboxed', () => {
 
     const canSandbox = process.platform === 'darwin' && (() => {
         try {
-            execFileSync('/usr/bin/sandbox-exec', [ '-p', '(version 1)(allow default)', '/usr/bin/true' ], { stdio: 'ignore' });
+            execFileSync(SANDBOX_EXEC, [ '-p', '(version 1)(allow default)', '/usr/bin/true' ], { stdio: 'ignore' });
             return true;
         }
         catch {
