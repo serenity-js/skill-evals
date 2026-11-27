@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { Writable } from 'node:stream';
 import { join } from 'node:path';
@@ -253,30 +253,6 @@ describe('spawnWithTimeout', () => {
     });
     afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
-    // A process that has stopped, but that its parent hasn't reaped yet, is a zombie, which kill(pid, 0) still finds. An
-    // orphan, such as the sleep a stopped shell leaves, is reaped by its new parent, init on Linux, in its own time, so
-    // on Linux, where /proc says which state a process is in, a zombie doesn't count as running.
-    const isRunning = (pid: number) => {
-        if (existsSync('/proc')) {
-            try {
-                const stat = readFileSync(`/proc/${ pid }/stat`, 'utf8');
-                // the state follows the command's name, in parentheses, which may hold spaces and parentheses itself
-                const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
-                return state !== 'Z' && state !== 'X';
-            }
-            catch {
-                return false;
-            }
-        }
-        try {
-            process.kill(pid, 0);
-            return true;
-        }
-        catch {
-            return false;
-        }
-    };
-
     const run = (script: string, timeoutMs: number) => spawnWithTimeout('sh', [ '-c', script ], {
         cwd: directory, env: process.env, stdout: join(directory, 'stdout'), stderr: join(directory, 'stderr'), timeoutMs,
     });
@@ -332,11 +308,19 @@ describe('spawnWithTimeout', () => {
     });
 
     it('stops the agent, and every process it started, when it runs out of time, and says it timed out', async () => {
-        const result = await run('sleep 60 & echo $! > child.pid; wait', 500);
+        // the agent's child holds the write end of a FIFO, and nothing else does, so the reader's end of it comes exactly
+        // when the child exits, however long its new parent takes to reap it. A child the harness doesn't stop would
+        // hold it for 60 seconds, and fail the spec on vitest's timeout instead
+        const fifo = join(directory, 'held');
+        execFileSync('mkfifo', [ fifo ]);
+        const childExited = new Promise<void>((resolve, reject) => {
+            createReadStream(fifo).on('error', reject).on('end', resolve).resume();
+        });
+
+        const result = await run(`sleep 60 3> '${ fifo }' & wait`, 500);
+        await childExited;
 
         expect(result.timedOut).toBe(true);
-        expect(existsSync(join(directory, 'child.pid'))).toBe(true);
-        expect(isRunning(Number(readFileSync(join(directory, 'child.pid'), 'utf8')))).toBe(false);
     });
 });
 
