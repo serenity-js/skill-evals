@@ -353,8 +353,10 @@ reviewer's packet had it, and the report lists it. That's 11 of the focus round'
 
 It was decided before the judge scored anything:
 
-- **Three sessions per run.** Their majority is compared with the reviewer's verdict. When no verdict has a majority,
-  it's a split, which counts as a disagreement. How often the sessions agree with each other is the judge's noise
+- **Three sessions per run.** Their majority is compared with the reviewer's verdict. A majority is more than half of
+  the three sessions, so a run where only one session left a verdict isn't decided by it. Without a majority, the
+  result is a split, when every session gave a verdict, or incomplete, when some didn't. Both count as disagreements.
+  How often the sessions agree with each other is the judge's noise
 - **Held out.** `review-guide.md` cites runs of the very rounds being judged. A verdict is held out when the guide
   doesn't cite its run under a section that names its item. Agreement is reported on every verdict, and on the
   held-out ones, which are what the decisions use

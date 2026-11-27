@@ -252,9 +252,14 @@ export interface CalibrationEntry {
     judged: Array<JudgeVerdict | undefined>;
 }
 
-/** The verdict most of the sessions that gave one agree on, `split` when no verdict has a majority, `missing` when none gave one. */
-export type Majority = Verdict | 'split' | 'missing';
+/**
+ * The verdict more than half of the planned sessions agree on. Without one: `split` when every session gave a
+ * verdict, `incomplete` when some left none, and `missing` when none gave one. So one session's verdict of three never
+ * decides a run.
+ */
+export type Majority = Verdict | 'split' | 'incomplete' | 'missing';
 
+/** The majority of `verdicts`, one per planned session, undefined for a session that left none. */
 export function majorityOf(verdicts: Array<Verdict | undefined>): Majority {
     const given = verdicts.filter((verdict): verdict is Verdict => verdict !== undefined);
     if (given.length === 0) {
@@ -265,7 +270,10 @@ export function majorityOf(verdicts: Array<Verdict | undefined>): Majority {
         counts.set(verdict, (counts.get(verdict) ?? 0) + 1);
     }
     const [ top, count ] = [ ...counts ].sort((one, other) => other[1] - one[1])[0];
-    return count * 2 > given.length ? top : 'split';
+    if (count * 2 > verdicts.length) {
+        return top;
+    }
+    return given.length === verdicts.length ? 'split' : 'incomplete';
 }
 
 export interface Share {
@@ -283,7 +291,8 @@ export interface ItemCalibration {
     heldOut: Share;
     /** Of the reviewer's fails, how many the judge's majority failed too */
     failsCaught: Share;
-    confusion: { reviewerPassJudgeFail: number, reviewerFailJudgePass: number, otherNa: number, split: number, missing: number };
+    /** Split and incomplete results count against the agreement; missing ones, where no session gave a verdict, don't count at all */
+    confusion: { reviewerPassJudgeFail: number, reviewerFailJudgePass: number, otherNa: number, split: number, incomplete: number, missing: number };
     /** Of the runs with two sessions' verdicts or more, how many had every session agree */
     unanimous: Share;
     status: CalibrationStatus;
@@ -373,6 +382,7 @@ export function calibrationReport(
                 reviewerFailJudgePass: ofItem.filter(entry => entry.reviewer === 'fail' && majority(entry) === 'pass').length,
                 otherNa: ofItem.filter(entry => [ 'pass', 'fail', 'n/a' ].includes(majority(entry)) && majority(entry) !== entry.reviewer && (entry.reviewer === 'n/a' || majority(entry) === 'n/a')).length,
                 split: ofItem.filter(entry => majority(entry) === 'split').length,
+                incomplete: ofItem.filter(entry => majority(entry) === 'incomplete').length,
                 missing: ofItem.filter(entry => majority(entry) === 'missing').length,
             },
             unanimous: {
@@ -424,9 +434,11 @@ export function renderCalibration(report: CalibrationReport): string {
         '',
         '## Where the judge differs',
         '',
-        '| Item | Reviewer pass, judge fail | Reviewer fail, judge pass | Either n/a | Split | Missing |',
-        '|---|---|---|---|---|---|',
-        ...report.items.map(({ item, confusion }) => `| ${ item } | ${ confusion.reviewerPassJudgeFail } | ${ confusion.reviewerFailJudgePass } | ${ confusion.otherNa } | ${ confusion.split } | ${ confusion.missing } |`),
+        'A split is three verdicts without a majority; an incomplete result is fewer than half of the sessions agreeing, since the others left no verdict. Both count against the agreement.',
+        '',
+        '| Item | Reviewer pass, judge fail | Reviewer fail, judge pass | Either n/a | Split | Incomplete | Missing |',
+        '|---|---|---|---|---|---|---|',
+        ...report.items.map(({ item, confusion }) => `| ${ item } | ${ confusion.reviewerPassJudgeFail } | ${ confusion.reviewerFailJudgePass } | ${ confusion.otherNa } | ${ confusion.split } | ${ confusion.incomplete } | ${ confusion.missing } |`),
         '',
         '## Every disagreement',
         '',

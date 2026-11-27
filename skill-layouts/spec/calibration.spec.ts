@@ -247,12 +247,29 @@ describe('calibrating the judge', () => {
             ({ round, run, item, reviewer, heldOut, judged: verdicts });
         const meta = { judge: { agent: 'kiro', model: 'claude-sonnet-5.5', version: 'kiro-cli 3.5.0' }, sessions: { sessions: 6, withoutVerdicts: 1, retried: 2, credits: 4.5, durationMs: 360_000 }, withoutProject: [] };
 
-        it('takes the verdict most sessions agree on, a split when none has a majority, and missing when no session gave one', () => {
+        it('takes the verdict more than half of the planned sessions agree on', () => {
             expect(majorityOf([ 'pass', 'fail', 'pass' ])).toBe('pass');
             expect(majorityOf([ 'pass', undefined, 'pass' ])).toBe('pass');
+        });
+
+        it('takes a split when every session gave a verdict, but none has a majority', () => {
             expect(majorityOf([ 'pass', 'fail', 'n/a' ])).toBe('split');
-            expect(majorityOf([ 'pass', 'fail', undefined ])).toBe('split');
+            expect(majorityOf([ 'pass', 'fail' ])).toBe('split');
+        });
+
+        it("never lets fewer than half of the planned sessions decide: it's incomplete when sessions left no verdict, and no verdict has a majority of them all", () => {
+            expect(majorityOf([ 'pass', undefined, undefined ])).toBe('incomplete');
+            expect(majorityOf([ 'pass', 'fail', undefined ])).toBe('incomplete');
             expect(majorityOf([ undefined, undefined ])).toBe('missing');
+        });
+
+        it("counts an incomplete result against the judge's agreement, and reports it apart", () => {
+            const report = calibrationReport([
+                entry('structure', 'pass', judged('pass', undefined, undefined)),
+                entry('structure', 'pass', judged('pass', 'pass', 'pass')),
+            ], meta);
+
+            expect(report.items[0]).toMatchObject({ agreement: { count: 1, of: 2 }, confusion: { incomplete: 1, split: 0, missing: 0 } });
         });
 
         it('counts the agreement on every verdict and on the held-out ones, the fails caught, the confusion and the unanimous sessions', () => {
@@ -270,7 +287,7 @@ describe('calibrating the judge', () => {
                 agreement: { count: 2, of: 4 },
                 heldOut: { count: 1, of: 3 },
                 failsCaught: { count: 1, of: 2 },
-                confusion: { reviewerPassJudgeFail: 0, reviewerFailJudgePass: 1, otherNa: 0, split: 1, missing: 1 },
+                confusion: { reviewerPassJudgeFail: 0, reviewerFailJudgePass: 1, otherNa: 0, split: 1, incomplete: 0, missing: 1 },
                 unanimous: { count: 2, of: 4 },
                 status: 'too few held-out verdicts',
             }) ]);
