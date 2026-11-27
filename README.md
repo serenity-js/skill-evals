@@ -20,6 +20,8 @@ npx vitest run
 
 Each evaluation's README says what else it needs, and how to run it, such as `pnpm run eval:skill-layouts`.
 
+[`AGENTS.md`](AGENTS.md) says how a change is made and checked, and how the code is designed.
+
 ## License
 
 [Apache 2.0](LICENSE)
