@@ -3,7 +3,6 @@
 // a reference solution. It's never told the layout, the agent or the run: the diff and the reply are blinded, and its
 // directory has a random name. Its verdicts don't count anywhere until a Calibration has compared them with the
 // reviewer's; see the README.
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { AgentAdapter, AgentHomes } from '../agents/index.ts';
@@ -11,6 +10,7 @@ import type { Finished, spawnWithTimeout } from '../child-processes.ts';
 import type { SkillDirectories } from '../skill-directories.ts';
 import { agentEnvironment, modelProblem } from '../runs.ts';
 import type { Trace } from '../streams.ts';
+import type { Filesystem } from './filesystem.ts';
 import { type JudgeVerdicts, RuleVerdict } from './rule-verdict.ts';
 import { type JudgeDirectory, VERDICTS_FILE } from './workspace.ts';
 
@@ -213,6 +213,8 @@ export interface JudgeDependencies {
     prompt: JudgePrompt;
     /** The skill directories its agent's stream is parsed with */
     skills: SkillDirectories;
+    /** What resets its agent's home for each session, and reads the streams it leaves */
+    filesystem: Pick<Filesystem, 'makeDirectory' | 'remove' | 'readFile'>;
 }
 
 /** An agent that judges changes. */
@@ -239,9 +241,9 @@ export class Judge {
      * wrong. A model other than the judge's stops the calibration, as it stops an evaluation.
      */
     async judge(directory: JudgeDirectory, rules: readonly string[], output: string): Promise<JudgeSession> {
-        const { adapter, model, homes, spawn, env, timeoutMs, prompt, skills } = this.dependencies;
+        const { adapter, model, homes, spawn, env, timeoutMs, prompt, skills, filesystem } = this.dependencies;
         this.freshHome();
-        mkdirSync(output, { recursive: true });
+        filesystem.makeDirectory(output);
         const attempts: JudgeAttempt[] = [];
         while (attempts.length < 2 && ! attempts.at(-1)?.verdicts) {
             const number = attempts.length + 1;
@@ -255,7 +257,7 @@ export class Judge {
                 stderr: file('agent', 'log'),
                 timeoutMs,
             });
-            const trace = adapter.parseStream(readFileSync(stream, 'utf8'), { timedOut: finished.timedOut, skills });
+            const trace = adapter.parseStream(filesystem.readFile(stream) ?? '', { timedOut: finished.timedOut, skills });
             const reported = modelProblem(model, trace.models);
             if (reported.stop) {
                 throw new Error(`the judge's session in ${ output }: ${ reported.stop }`);
@@ -267,10 +269,10 @@ export class Judge {
 
     /** Every session's agent gets a home of its own, in the homes the sessions share, so no session sees another's */
     private freshHome(): void {
-        const { adapter, homes } = this.dependencies;
+        const { adapter, homes, filesystem } = this.dependencies;
         const home = homes[adapter.homeVariable];
-        rmSync(home, { recursive: true, force: true });
-        mkdirSync(home, { recursive: true });
+        filesystem.remove(home);
+        filesystem.makeDirectory(home);
         adapter.prepareHome(home);
     }
 }

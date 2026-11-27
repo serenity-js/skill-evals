@@ -4,15 +4,14 @@
 // agreement is reported on every verdict, and on the held-out ones, which the guide doesn't cite under the item. Until
 // an item is calibrated, the judge's verdicts on it don't count anywhere. The protocol is in the README, under
 // "Calibrating the judge".
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Request } from '../requests.ts';
 import type { Blinding } from '../review.ts';
-import { writeJson } from '../results.ts';
 import { Ballot } from './ballot.ts';
 import { Comparison } from './comparison.ts';
 import type { JudgeBrief } from './brief.ts';
+import { type Filesystem, writeJsonTo } from './filesystem.ts';
 import { type Judge, JudgePrompt, type JudgeSession } from './judge.ts';
 import { renderCalibration } from './markdown.ts';
 import type { CalibrationProtocol } from './protocol.ts';
@@ -30,19 +29,21 @@ export class CalibrationFiles {
     readonly markdown: string;
     readonly json: string;
     readonly sessions: SessionStore;
+    private readonly filesystem: Pick<Filesystem, 'readFile' | 'writeFile' | 'remove'>;
 
-    constructor(out: string) {
+    /** In `<out>/calibration`, which it writes, and its sessions read and write, through `filesystem` */
+    constructor(out: string, filesystem: Pick<Filesystem, 'readFile' | 'writeFile' | 'remove'>) {
         this.directory = join(out, 'calibration');
         this.markdown = join(this.directory, 'calibration.md');
         this.json = join(this.directory, 'calibration.json');
-        this.sessions = new SessionStore(this.directory);
+        this.filesystem = filesystem;
+        this.sessions = new SessionStore(this.directory, filesystem);
     }
 
     /** calibration.json has the report and every comparison it's made from; calibration.md renders the report */
     saveReport(report: CalibrationReport, comparisons: readonly Comparison[], protocol: CalibrationProtocol): void {
-        mkdirSync(this.directory, { recursive: true });
-        writeJson(this.json, { ...report, entries: comparisons });
-        writeFileSync(this.markdown, renderCalibration(report, protocol));
+        writeJsonTo(this.filesystem, this.json, { ...report, entries: comparisons });
+        this.filesystem.writeFile(this.markdown, renderCalibration(report, protocol));
     }
 }
 
@@ -66,6 +67,8 @@ export interface CalibrationDependencies {
     template: string;
     /** Where the runs' projects are rebuilt */
     work: string;
+    /** What removes a run's rebuilt project, once its sessions are done */
+    filesystem: Pick<Filesystem, 'remove'>;
     /** Where the judge's directories are written */
     workspace: JudgeWorkspace;
     /** What hides the run's skills in the judge's brief */
@@ -122,7 +125,7 @@ export class Calibration {
         for (let repeat = 1; repeat <= protocol.sessionsPerRun; repeat++) {
             sessions.push(await this.session({ round: round.name, run: run.id, repeat }, judgeOfRun, brief));
         }
-        rmSync(scratch, { recursive: true, force: true });
+        this.dependencies.filesystem.remove(scratch);
         return {
             sessions,
             comparisons: [ ...run.verdicts ].map(([ item, reviewer ]) => Comparison.of({

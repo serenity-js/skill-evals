@@ -25,7 +25,8 @@ import { ReviewGuide } from './judging/review-guide.ts';
 import { JudgeIdentity } from './judging/session-store.ts';
 import { RecordedRounds } from './judging/recorded-round.ts';
 import { FixtureHistory, ProjectBuilder } from './judging/starting-project.ts';
-import { JudgeWorkspace, nodeFilesystem } from './judging/workspace.ts';
+import { type Filesystem, nodeFilesystem } from './judging/filesystem.ts';
+import { JudgeWorkspace } from './judging/workspace.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
 import { compareResults } from './compare.ts';
@@ -652,11 +653,13 @@ export interface CalibrationSetup {
     /** The judge's agent's version, which is part of the identity its sessions are reused by */
     version: string;
     protocol: CalibrationProtocol;
+    /** What every part of the calibration reads and writes files with */
+    filesystem: Filesystem;
     log: (message: string) => void;
 }
 
 /** The calibration of the judge `setup` configures, over the checklist, the review guide and the requests as they are. */
-export function calibrationOf(args: Pick<Arguments, 'template' | 'out' | 'work'>, { config, env, spawn, version, protocol, log: logged }: CalibrationSetup): Calibration {
+export function calibrationOf(args: Pick<Arguments, 'template' | 'out' | 'work'>, { config, env, spawn, version, protocol, filesystem, log: logged }: CalibrationSetup): Calibration {
     const commands = { run, runBuffer };
     const { requests, heldBack } = loadRequests();
     const adapter = adapterOf(config.judge.agent);
@@ -670,21 +673,23 @@ export function calibrationOf(args: Pick<Arguments, 'template' | 'out' | 'work'>
             timeoutMs: config.runTimeoutMinutes * 60_000,
             prompt: JudgePrompt.forProject(),
             skills: harnessSkillDirectories(),
+            filesystem,
         }),
         blinding: harnessBlinding(),
         identity: JudgeIdentity.of(config.judge.agent, config.judge.model, version),
-        files: new CalibrationFiles(args.out),
+        files: new CalibrationFiles(args.out, filesystem),
         guide: ReviewGuide.parse(readFileSync(REVIEW_GUIDE, 'utf8'), CHECKLIST),
         protocol,
         checklist: { items: CHECKLIST.map(item => item.id), exercises: (request, item) => exercises(request, item as ChecklistItem) },
         requests: new Map([ ...requests, ...heldBack ].map(request => [ request.id, request ])),
         rounds: new RecordedRounds({ items: CHECKLIST.map(item => item.id), defaultPort: config.apiServer.port }),
         references: { filesOf: request => withoutMarkers(referenceFilesOf(request)) },
-        projects: new ProjectBuilder(commands, hashOf),
-        fixtures: new FixtureHistory(evalRoot, commands),
+        projects: new ProjectBuilder(commands, hashOf, filesystem),
+        fixtures: new FixtureHistory(evalRoot, commands, filesystem),
         template: args.template,
         work: args.work,
-        workspace: new JudgeWorkspace({ root: join(args.work, 'judge'), filesystem: nodeFilesystem(), randomName: () => randomBytes(4).toString('hex') }),
+        filesystem,
+        workspace: new JudgeWorkspace({ root: join(args.work, 'judge'), filesystem, randomName: () => randomBytes(4).toString('hex') }),
         log: logged,
     });
 }
@@ -704,9 +709,10 @@ export async function calibrateJudge(args: Arguments, { config = loadConfig(), e
             throw new Error(`${ round } isn't a round's results: it has no mapping.json`);
         }
     }
-    const calibration = calibrationOf(args, { config, env, spawn: spawnWithTimeout, version: versionOf(adapter), protocol: new CalibrationProtocol(), log });
+    const filesystem = nodeFilesystem();
+    const calibration = calibrationOf(args, { config, env, spawn: spawnWithTimeout, version: versionOf(adapter), protocol: new CalibrationProtocol(), filesystem, log });
     await calibration.run(args.rounds);
-    log(`the judge's verdicts compared with the reviewer's: ${ new CalibrationFiles(args.out).markdown }`);
+    log(`the judge's verdicts compared with the reviewer's: ${ new CalibrationFiles(args.out, filesystem).markdown }`);
 }
 
 /**

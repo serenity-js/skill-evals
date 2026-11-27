@@ -1,10 +1,9 @@
 // The project a recorded run started from, and left, rebuilt for the judge: the template at the round's commit, with
 // the newest version of the request's fixture that the run's diff applies to.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { run, runBuffer } from '../child-processes.ts';
+import type { Filesystem } from './filesystem.ts';
 
 /** How the starting projects run git and tar: child-processes.ts's runner. */
 export interface Commands {
@@ -23,10 +22,12 @@ export class FixtureHistory {
 
     private readonly root: string;
     private readonly commands: Commands;
+    private readonly filesystem: Pick<Filesystem, 'copy' | 'exists' | 'remove' | 'makeTemporaryDirectory'>;
 
-    constructor(root: string, commands: Commands) {
+    constructor(root: string, commands: Commands, filesystem: Pick<Filesystem, 'copy' | 'exists' | 'remove' | 'makeTemporaryDirectory'>) {
         this.root = root;
         this.commands = commands;
+        this.filesystem = filesystem;
     }
 
     /**
@@ -38,25 +39,26 @@ export class FixtureHistory {
             return [ { label: 'no fixture', copyTo: () => {} } ];
         }
         const { run, runBuffer } = this.commands;
+        const filesystem = this.filesystem;
         const current = join(this.root, 'fixtures', fixture);
         // the fixture's path in the repository, as git has it, whatever links the path to the repository goes through
         const top = run('git', [ 'rev-parse', '--show-toplevel' ], { cwd: current, stdio: 'pipe' }).trim();
         const path = run('git', [ 'rev-parse', '--show-prefix' ], { cwd: current, stdio: 'pipe' }).trim().replace(/\/$/, '');
         const commits = run('git', [ 'log', '--format=%H', '--', path ], { cwd: top, stdio: 'pipe' }).split('\n').filter(Boolean);
         return [
-            { label: `the ${ fixture } fixture as it is`, copyTo: directory => cpSync(current, directory, { recursive: true }) },
+            { label: `the ${ fixture } fixture as it is`, copyTo: directory => filesystem.copy(current, directory) },
             ...commits.map(commit => ({
                 label: `the ${ fixture } fixture as of ${ commit.slice(0, 7) }`,
                 copyTo: (directory: string) => {
-                    const scratch = mkdtempSync(join(tmpdir(), 'skill-layouts-fixture-'));
+                    const scratch = filesystem.makeTemporaryDirectory('skill-layouts-fixture-');
                     try {
                         runBuffer('tar', [ '-x', '-C', scratch ], { input: runBuffer('git', [ 'archive', commit, path ], { cwd: top, maxBuffer: 256 * 1024 * 1024 }) });
-                        if (existsSync(join(scratch, path))) {
-                            cpSync(join(scratch, path), directory, { recursive: true });
+                        if (filesystem.exists(join(scratch, path))) {
+                            filesystem.copy(join(scratch, path), directory);
                         }
                     }
                     finally {
-                        rmSync(scratch, { recursive: true, force: true });
+                        filesystem.remove(scratch);
                     }
                 },
             })),
@@ -91,10 +93,12 @@ export class ProjectBuilder {
 
     private readonly commands: Commands;
     private readonly hashOf: (directory: string) => string;
+    private readonly filesystem: Pick<Filesystem, 'makeDirectory' | 'writeFile' | 'remove' | 'copy'>;
 
-    constructor(commands: Commands, hashOf: (directory: string) => string) {
+    constructor(commands: Commands, hashOf: (directory: string) => string, filesystem: Pick<Filesystem, 'makeDirectory' | 'writeFile' | 'remove' | 'copy'>) {
         this.commands = commands;
         this.hashOf = hashOf;
+        this.filesystem = filesystem;
     }
 
     /**
@@ -104,22 +108,22 @@ export class ProjectBuilder {
      */
     build(directory: string, { template, commit, versions, diff }: { template: string, commit: string, versions: FixtureVersion[], diff: string }): StartingProject {
         const { run, runBuffer } = this.commands;
+        const filesystem = this.filesystem;
         const git = (cwd: string, args: string[]) =>
             run('git', [ '-c', 'user.name=skill-layouts', '-c', 'user.email=skill-layouts@localhost', '-c', 'commit.gpgsign=false', ...args ], { cwd, stdio: 'pipe' });
         const before = join(directory, 'before');
         const after = join(directory, 'after');
         const patch = join(directory, 'run.patch');
-        mkdirSync(directory, { recursive: true });
-        writeFileSync(patch, diff);
+        filesystem.writeFile(patch, diff);
         const archive = runBuffer('git', [ 'archive', commit ], { cwd: template, maxBuffer: 256 * 1024 * 1024 });
         const reasons: string[] = [];
         for (const version of versions) {
-            rmSync(before, { recursive: true, force: true });
-            rmSync(after, { recursive: true, force: true });
-            mkdirSync(before, { recursive: true });
+            filesystem.remove(before);
+            filesystem.remove(after);
+            filesystem.makeDirectory(before);
             runBuffer('tar', [ '-x', '-C', before ], { input: archive });
             version.copyTo(before);
-            cpSync(before, after, { recursive: true });
+            filesystem.copy(before, after);
             if (diff.trim() === '') {
                 return this.built(directory, version.label);
             }
@@ -132,14 +136,14 @@ export class ProjectBuilder {
                 reasons.push(`${ version.label }: ${ String((error as { stderr?: string }).stderr ?? '').trim().split('\n')[0] }`);
             }
             finally {
-                rmSync(join(after, '.git'), { recursive: true, force: true });
+                filesystem.remove(join(after, '.git'));
             }
         }
         throw new Error(`its diff doesn't apply to the template at ${ commit } with ${ reasons.join('; ') }`);
     }
 
     private built(directory: string, version: string): StartingProject {
-        rmSync(join(directory, 'after', '.git'), { recursive: true, force: true });
+        this.filesystem.remove(join(directory, 'after', '.git'));
         return StartingProject.of(directory, version, { before: this.hashOf(join(directory, 'before')), after: this.hashOf(join(directory, 'after')) });
     }
 }

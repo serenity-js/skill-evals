@@ -42,9 +42,11 @@ that hold their data and the behaviour that uses it. `skill-layouts/src/judging/
 - **Behaviour lives with the data it uses.** A ballot knows its majority, a comparison knows whether it agrees, and a
   share renders its own percentage, rather than functions elsewhere filtering plain structs. Compute a derived value
   once, where its data is, rather than every time it's needed
-- **Dependencies are given at construction**: the process runner, the clock, the log, random names, and the
-  environment. A class doesn't import them, and they don't travel in options bags. The command line is where they're
-  chosen, as `calibrationOf` in `cli.ts` composes a `Calibration`
+- **Dependencies are given at construction**: the process runner, the clock, the log, random names, the
+  environment, and the filesystem. A class doesn't import them, and they don't travel in options bags. The command
+  line is where they're chosen, as `calibrationOf` in `cli.ts` composes a `Calibration`. A class that reads or writes
+  files takes only the operations of `Filesystem`, in `judging/filesystem.ts`, that it uses, as a `Pick<Filesystem, …>`.
+  `cli.ts` gives it `nodeFilesystem()`; a spec can give it an in-memory one, as `spec/memory-filesystem.ts` is
 - **No module-level mutable state, and no module-level configuration.** Only true constants live at a module's top
   level, such as a validator or a file's fixed name. A threshold, a number of repeats or a model is configuration: a
   constructor argument, with its default where the class is defined, or a field of `config.json`

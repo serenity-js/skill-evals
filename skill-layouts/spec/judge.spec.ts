@@ -9,7 +9,9 @@ import { JudgeBrief } from '../src/judging/brief.ts';
 import { Judge, JudgePrompt, type Spawn } from '../src/judging/judge.ts';
 import { JudgeIdentity } from '../src/judging/session-store.ts';
 import { StartingProject } from '../src/judging/starting-project.ts';
-import { type JudgeDirectory, JudgeWorkspace, nodeFilesystem } from '../src/judging/workspace.ts';
+import { nodeFilesystem } from '../src/judging/filesystem.ts';
+import { type JudgeDirectory, JudgeWorkspace } from '../src/judging/workspace.ts';
+import { MemoryFilesystem } from './memory-filesystem.ts';
 import { JudgeVerdicts, RuleVerdict } from '../src/judging/rule-verdict.ts';
 import { harnessBlinding, harnessSkillDirectories } from '../src/harness-skills.ts';
 import { Verdict } from '../src/judging/verdict.ts';
@@ -224,14 +226,36 @@ describe('the judge', () => {
             const copied: string[] = [];
             const recording = new JudgeWorkspace({
                 root: '/judge',
-                filesystem: { writeFile: path => written.push(path), copyProject: (from, to) => copied.push(`${ from } -> ${ to }`), readFile: () => undefined, remove: () => {} },
+                filesystem: {
+                    writeFile: path => written.push(path),
+                    copy: (from, to, include) => copied.push(`${ from } -> ${ to }, ${ [ '/p/src/a.ts', '/p/.git/HEAD', '/p/node_modules/x' ].filter(path => include?.(path)).join(' ') }`),
+                    readFile: () => undefined,
+                    remove: () => {},
+                },
                 randomName: () => 'x',
             });
 
             recording.prepare(brief);
 
             expect(written).toEqual(brief.files().map(file => `/judge/x/${ file.path }`));
-            expect(copied).toEqual([ `${ join(root, 'project', 'before') } -> /judge/x/before`, `${ join(root, 'project', 'after') } -> /judge/x/after` ]);
+            expect(copied).toEqual([ `${ join(root, 'project', 'before') } -> /judge/x/before, /p/src/a.ts`, `${ join(root, 'project', 'after') } -> /judge/x/after, /p/src/a.ts` ]);
+        });
+
+        it('keeps a judge directory in memory, with an in-memory filesystem', () => {
+            const filesystem = new MemoryFilesystem();
+            filesystem.writeFile('/project/before/src/a.ts', 'before');
+            filesystem.writeFile('/project/before/node_modules/x/index.js', 'x');
+            filesystem.writeFile('/project/after/src/a.ts', 'after');
+            const inMemory = JudgeBrief.of({ request: 'r', diff: '', reply: '', rules: [], exercised: [], reference: new Map(), project: StartingProject.of('/project', 'v', { before: 'b', after: 'a' }) }, blinding);
+
+            const directory = new JudgeWorkspace({ root: '/judge', filesystem, randomName: () => 'x' }).prepare(inMemory);
+            filesystem.writeFile('/judge/x/verdicts.json', json({ verdicts: [] }));
+
+            expect(filesystem.readFile('/judge/x/before/src/a.ts')).toBe('before');
+            expect(filesystem.exists('/judge/x/before/node_modules')).toBe(false);
+            expect(directory.verdicts([]).isUsable()).toBe(true);
+            directory.remove();
+            expect(filesystem.exists('/judge/x')).toBe(false);
         });
     });
 
@@ -265,7 +289,7 @@ describe('the judge', () => {
                 }
                 return { exitCode: 0, durationMs: 21_000, timedOut: false } satisfies Finished;
             };
-            const judge = new Judge({ adapter: adapterOf('kiro'), model, homes: prepareAgentHomes(join(root, 'homes'), join(root, 'npm-cache')), spawn, env, timeoutMs: 120_000, prompt: JudgePrompt.forProject(), skills: harnessSkillDirectories() });
+            const judge = new Judge({ adapter: adapterOf('kiro'), model, homes: prepareAgentHomes(join(root, 'homes'), join(root, 'npm-cache')), spawn, env, timeoutMs: 120_000, prompt: JudgePrompt.forProject(), skills: harnessSkillDirectories(), filesystem: nodeFilesystem() });
             return { judge, calls };
         }
 

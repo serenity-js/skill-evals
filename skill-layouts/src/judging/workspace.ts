@@ -1,41 +1,19 @@
 // Where the judge works: a directory per session, with what it's given written into it. JudgeWorkspace is the only
 // code that writes a judge's inputs, with the filesystem operations it's constructed with.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import type { JudgeBrief } from './brief.ts';
+import type { Filesystem } from './filesystem.ts';
 import { JudgeVerdicts } from './rule-verdict.ts';
 
 /** The file the judge writes its verdicts to, in its directory */
 export const VERDICTS_FILE = 'verdicts.json';
 
-/** The filesystem operations a workspace needs. */
-export interface WorkspaceFilesystem {
-    /** Writes a file, with the directories it's in */
-    writeFile(path: string, content: string): void;
-    /** Copies a project's directory, without anything the harness or git put there: .git and node_modules */
-    copyProject(from: string, to: string): void;
-    /** A file's contents, or undefined when there's no such file */
-    readFile(path: string): string | undefined;
-    /** Removes a directory, and everything in it */
-    remove(path: string): void;
-}
+/** The filesystem operations a workspace needs */
+export type WorkspaceFilesystem = Pick<Filesystem, 'writeFile' | 'copy' | 'readFile' | 'remove'>;
 
 /** The project's files, without anything the harness or git put there. */
 const isProjectFile = (source: string) => ! source.split(/[/\\]/).some(part => part === '.git' || part === 'node_modules');
-
-/** The workspace's filesystem operations, as Node.js has them */
-export function nodeFilesystem(): WorkspaceFilesystem {
-    return {
-        writeFile: (path, content) => {
-            mkdirSync(dirname(path), { recursive: true });
-            writeFileSync(path, content);
-        },
-        copyProject: (from, to) => cpSync(from, to, { recursive: true, filter: isProjectFile }),
-        readFile: path => existsSync(path) ? readFileSync(path, 'utf8') : undefined,
-        remove: path => rmSync(path, { recursive: true, force: true }),
-    };
-}
 
 /** The directory a judge works in, with what it was given, and the verdicts it leaves. Only a JudgeWorkspace makes one. */
 export interface JudgeDirectory {
@@ -85,7 +63,7 @@ export class JudgeWorkspace {
         }
         for (const [ side, source ] of [ [ 'before', brief.before ], [ 'after', brief.after ] ] as const) {
             if (source !== undefined) {
-                this.filesystem.copyProject(source, join(path, side));
+                this.filesystem.copy(source, join(path, side), isProjectFile);
             }
         }
         return new WrittenJudgeDirectory(path, this.filesystem);

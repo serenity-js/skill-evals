@@ -10,6 +10,7 @@ import { calibrationOf } from '../src/cli.ts';
 import { CHECKLIST, type ChecklistItem, exercises } from '../src/conventions.ts';
 import { Ballot } from '../src/judging/ballot.ts';
 import { CalibrationFiles } from '../src/judging/calibration.ts';
+import { nodeFilesystem } from '../src/judging/filesystem.ts';
 import { Comparison } from '../src/judging/comparison.ts';
 import { JudgePrompt, type Spawn } from '../src/judging/judge.ts';
 import { renderCalibration } from '../src/judging/markdown.ts';
@@ -203,7 +204,7 @@ describe('calibrating the judge', () => {
         let template: string;
         let commit: string;
         let harness: string;
-        const projects = new ProjectBuilder(commands, hashOf);
+        const projects = new ProjectBuilder(commands, hashOf, nodeFilesystem());
 
         // a change to the fixture's spec, as it was before the fixture changed
         const diff = [
@@ -237,7 +238,7 @@ describe('calibrating the judge', () => {
         afterEach(() => rmSync(root, { recursive: true, force: true }));
 
         const read = (path: string) => readFileSync(join(root, 'project', path), 'utf8');
-        const versionsOf = (fixture: string | undefined) => new FixtureHistory(harness, commands).versionsOf(fixture);
+        const versionsOf = (fixture: string | undefined) => new FixtureHistory(harness, commands, nodeFilesystem()).versionsOf(fixture);
 
         it('builds the template with the fixture as it is, when the diff applies to it', () => {
             const project = projects.build(join(root, 'project'), { template, commit, versions: versionsOf('precision'), diff: diff.replace('the first version', 'the second version') });
@@ -499,7 +500,7 @@ describe('calibrating the judge', () => {
 
         const calibration = (spawn: Spawn, { version = 'kiro-cli 3.5.0', model = 'claude-sonnet-5.5' } = {}) => calibrationOf(
             { template, out: join(root, 'out'), work: join(root, 'work') },
-            { config: { ...config, judge: { agent: 'kiro', model } }, env: { PATH: '/usr/bin', KIRO_API_KEY: 'k' }, spawn, version, protocol: new CalibrationProtocol({ sessionsPerRun: 2 }), log: () => {} },
+            { config: { ...config, judge: { agent: 'kiro', model } }, env: { PATH: '/usr/bin', KIRO_API_KEY: 'k' }, spawn, version, protocol: new CalibrationProtocol({ sessionsPerRun: 2 }), filesystem: nodeFilesystem(), log: () => {} },
         );
 
         it("judges each reviewed run as many times as the protocol says, and compares the judge's verdicts with the reviewer's", async () => {
@@ -510,7 +511,7 @@ describe('calibrating the judge', () => {
             expect(seen.slice(0, 2)).toEqual([ 'Node.js 22 or later\n', 'Node.js 22 or later\n' ]);
             expect(report.items.map(item => [ item.item, item.agreement.toJSON() ])).toEqual([ [ 'structure', { count: 1, of: 2 } ], [ 'timeout', { count: 1, of: 1 } ] ]);
             expect(report.sessions).toMatchObject({ sessions: 4, withoutVerdicts: 0, credits: 0.9536 });
-            const files = new CalibrationFiles(join(root, 'out'));
+            const files = new CalibrationFiles(join(root, 'out'), nodeFilesystem());
             expect(readFileSync(files.markdown, 'utf8')).toContain('# Calibrating the judge');
             expect(JSON.parse(readFileSync(files.json, 'utf8')).entries).toHaveLength(3);
             expect(existsSync(join(files.sessions.output({ round: 'regression', run: 'aaaaaaaa', repeat: 2 }), 'verdicts.json'))).toBe(true);
@@ -524,7 +525,7 @@ describe('calibrating the judge', () => {
             expect(seen).toEqual([ 'Node.js 22 or later\n', 'Node.js 22 or later\n', '(no project)', '(no project)' ]);
             expect(prompts.slice(2)).toEqual([ JudgePrompt.forDiffAlone().text, JudgePrompt.forDiffAlone().text ]);
             expect(report.withoutProject).toEqual([ { round: 'regression', run: 'bbbbbbbb', reason: expect.stringContaining("its diff doesn't apply") } ]);
-            expect(readFileSync(new CalibrationFiles(join(root, 'out')).markdown, 'utf8')).toContain('- regression bbbbbbbb: its diff doesn\'t apply');
+            expect(readFileSync(new CalibrationFiles(join(root, 'out'), nodeFilesystem()).markdown, 'utf8')).toContain('- regression bbbbbbbb: its diff doesn\'t apply');
         });
 
         it('resumes, judging again only the sessions whose prompt or inputs changed', async () => {
@@ -551,7 +552,7 @@ describe('calibrating the judge', () => {
             const report = await calibration(newModel.spawn, { version: 'kiro-cli 3.6.0', model: 'claude-opus-5.5' }).run([ round ]);
             expect(newModel.seen).toHaveLength(4);
             expect(report.judge.toJSON()).toEqual({ agent: 'kiro', model: 'claude-opus-5.5', version: 'kiro-cli 3.6.0' });
-            expect(JSON.parse(readFileSync(join(new CalibrationFiles(join(root, 'out')).sessions.output({ round: 'regression', run: 'aaaaaaaa', repeat: 1 }), 'session.json'), 'utf8')).judge)
+            expect(JSON.parse(readFileSync(join(new CalibrationFiles(join(root, 'out'), nodeFilesystem()).sessions.output({ round: 'regression', run: 'aaaaaaaa', repeat: 1 }), 'session.json'), 'utf8')).judge)
                 .toEqual({ agent: 'kiro', model: 'claude-opus-5.5', version: 'kiro-cli 3.6.0' });
         });
 

@@ -1,7 +1,6 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { writeJson } from '../results.ts';
+import { type Filesystem, writeJsonTo } from './filesystem.ts';
 import { JudgeSession } from './judge.ts';
 
 /** The judge a session ran: its agent, its model and the agent's version. */
@@ -63,9 +62,11 @@ export interface SessionKey {
 export class SessionStore {
 
     private readonly directory: string;
+    private readonly filesystem: Pick<Filesystem, 'readFile' | 'writeFile' | 'remove'>;
 
-    constructor(directory: string) {
+    constructor(directory: string, filesystem: Pick<Filesystem, 'readFile' | 'writeFile' | 'remove'>) {
         this.directory = directory;
+        this.filesystem = filesystem;
     }
 
     /** Where a session's streams, logs and files go */
@@ -75,23 +76,23 @@ export class SessionStore {
 
     /** The saved session, when there is one with this fingerprint */
     find(key: SessionKey, fingerprint: Fingerprint): JudgeSession | undefined {
-        const file = join(this.output(key), 'session.json');
-        if (! existsSync(file)) {
+        const text = this.filesystem.readFile(join(this.output(key), 'session.json'));
+        if (text === undefined) {
             return undefined;
         }
-        const saved = JSON.parse(readFileSync(file, 'utf8')) as { fingerprint?: string } & Parameters<typeof JudgeSession.fromJSON>[0];
+        const saved = JSON.parse(text) as { fingerprint?: string } & Parameters<typeof JudgeSession.fromJSON>[0];
         return fingerprint.equals(saved.fingerprint) ? JudgeSession.fromJSON(saved) : undefined;
     }
 
     /** Removes a session that's to be judged again, with its streams and logs */
     clear(key: SessionKey): void {
-        rmSync(this.output(key), { recursive: true, force: true });
+        this.filesystem.remove(this.output(key));
     }
 
     save(key: SessionKey, fingerprint: Fingerprint, identity: JudgeIdentity, session: JudgeSession): void {
-        writeJson(join(this.output(key), 'session.json'), { fingerprint, judge: identity, ...session.toJSON() });
+        writeJsonTo(this.filesystem, join(this.output(key), 'session.json'), { fingerprint, judge: identity, ...session.toJSON() });
         if (session.verdicts) {
-            writeJson(join(this.output(key), 'verdicts.json'), { verdicts: session.verdicts });
+            writeJsonTo(this.filesystem, join(this.output(key), 'verdicts.json'), { verdicts: session.verdicts });
         }
     }
 }
