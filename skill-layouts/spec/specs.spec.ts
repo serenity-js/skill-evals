@@ -116,6 +116,49 @@ describe('a specs directory', () => {
             }, [
                 `${ CASE }/expected is a file, not a directory`,
             ] ],
+            [ "a case's prompt.md is a directory", () => {
+                rmSync(path(`${ CASE }/prompt.md`));
+                mkdirSync(path(`${ CASE }/prompt.md`));
+            }, [
+                `${ CASE }/prompt.md is a directory, not a file`,
+            ] ],
+            [ "a project's project.json is a directory", () => {
+                rmSync(path('projects/greeter/project.json'));
+                mkdirSync(path('projects/greeter/project.json'));
+            }, [
+                'projects/greeter/project.json is a directory, not a file',
+            ] ],
+            [ "a rule's README.md is a directory", () => {
+                rmSync(path('rules/descriptive-names/README.md'));
+                mkdirSync(path('rules/descriptive-names/README.md'));
+            }, [
+                'rules/descriptive-names/README.md is a directory, not a file',
+            ] ],
+            [ "a rule's rule.yml is a directory", () => {
+                rmSync(path('rules/strict-equality/rule.yml'));
+                mkdirSync(path('rules/strict-equality/rule.yml'));
+            }, [
+                'rules/strict-equality/rule.yml is a directory, not a file',
+            ] ],
+            [ "a rule's pass/ is a file", () => {
+                rmSync(path('rules/descriptive-names/pass'), { recursive: true });
+                write('rules/descriptive-names/pass', '');
+            }, [
+                'rules/descriptive-names/pass is a file, not a directory',
+                'rules/descriptive-names has no pass/ example: every rule has at least one pass/ and one fail/',
+            ] ],
+            [ "a judged rule's directory example has after as a file", () => {
+                rmSync(path('rules/descriptive-names/fail/one-letter-names/after'), { recursive: true });
+                write('rules/descriptive-names/fail/one-letter-names/after', '');
+            }, [
+                'rules/descriptive-names/fail/one-letter-names/after is a file, not a directory',
+            ] ],
+            [ "a directory example's reply.md is a directory", () => {
+                rmSync(path('rules/descriptive-names/fail/one-letter-names/reply.md'));
+                mkdirSync(path('rules/descriptive-names/fail/one-letter-names/reply.md'));
+            }, [
+                'rules/descriptive-names/fail/one-letter-names/reply.md is a directory, not a file',
+            ] ],
             [ 'cases/ holds a file', () => write('cases/README.md', ''), [
                 "cases/README.md isn't a case: cases/ holds a directory for each",
             ] ],

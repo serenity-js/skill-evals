@@ -3,13 +3,13 @@
 // projects/<project>/ is a starting project, with its project.json, and the fixture/ copied over its template; and
 // rules/<rule>/ is a rule, as rules.ts reads it. Specs.read loads one, and validate says everything that's wrong with
 // it, each problem with its file, without a template, a checkout or the network.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { type Api, APIS } from './outcome.ts';
 import { aString, type Check, entriesOf, expecting, listOf, oneOf, onlyFields, parseJson, problemsIn } from './records.ts';
 import { madeWrong, markersIn, referenceFilesOf } from './references.ts';
-import { type DirectoryDiff, entryProblems, Rule, SKILL_FILE } from './rules.ts';
+import { type DirectoryDiff, type Entries, entryProblems, isDirectory, isFile, Rule, SKILL_FILE } from './rules.ts';
 
 /** cases/<case>/case.json. The prompt is cases/<case>/prompt.md, and the reference solution is cases/<case>/expected/ */
 export interface CaseDefinition {
@@ -81,17 +81,14 @@ function readJson<T>(location: string, file: string, check: Check, problems: str
 export class Case {
 
     static read(directory: string, name: string, shown: string, problems: string[]): Case | undefined {
-        problems.push(...entryProblems(directory, shown, { required: [ 'prompt.md', 'case.json', 'expected' ], allowed: [ 'prompt.md', 'case.json', 'expected' ], what: 'a case, which holds prompt.md, case.json and expected/' }));
-        const definition = existsSync(join(directory, 'case.json')) ? readJson<CaseDefinition>(join(directory, 'case.json'), `${ shown }/case.json`, CASE, problems) : undefined;
+        problems.push(...entryProblems(directory, shown, { entries: CASE_ENTRIES, required: Object.keys(CASE_ENTRIES), what: 'a case, which holds prompt.md, case.json and expected/' }));
+        const definition = isFile(join(directory, 'case.json')) ? readJson<CaseDefinition>(join(directory, 'case.json'), `${ shown }/case.json`, CASE, problems) : undefined;
         const expected = join(directory, 'expected');
-        if (existsSync(expected) && ! statSync(expected).isDirectory()) {
-            problems.push(`${ shown }/expected is a file, not a directory`);
-        }
-        else if (existsSync(expected)) {
+        if (isDirectory(expected)) {
             problems.push(...Case.markerProblems(expected, `${ shown }/expected`));
         }
         const prompt = join(directory, 'prompt.md');
-        return definition && existsSync(prompt) ? new Case(name, shown, definition, readFileSync(prompt, 'utf8'), expected) : undefined;
+        return definition && isFile(prompt) ? new Case(name, shown, definition, readFileSync(prompt, 'utf8'), expected) : undefined;
     }
 
     /** At most one `// wrong:` marker, with the value it makes wrong on its line; a reference without one is only checked to pass */
@@ -143,13 +140,13 @@ export class Project {
 
     static read(directory: string, name: string, shown: string, problems: string[]): Project | undefined {
         const file = join(directory, 'project.json');
-        if (! existsSync(file)) {
-            problems.push(`${ shown }/project.json is missing`);
+        if (! isFile(file)) {
+            problems.push(`${ shown }/project.json ${ existsSync(file) ? 'is a directory, not a file' : 'is missing' }`);
             return undefined;
         }
         const definition = readJson<ProjectDefinition>(file, `${ shown }/project.json`, PROJECT, problems);
         const fixture = join(directory, 'fixture');
-        return definition ? new Project(name, definition, existsSync(fixture) ? fixture : undefined) : undefined;
+        return definition ? new Project(name, definition, isDirectory(fixture) ? fixture : undefined) : undefined;
     }
 
     readonly name: string;
@@ -164,6 +161,8 @@ export class Project {
     }
 }
 
+const CASE_ENTRIES: Entries = { 'prompt.md': 'file', 'case.json': 'file', expected: 'directory' };
+
 const TOP_LEVEL = [ 'cases', 'rules', 'projects' ] as const;
 
 /** A specs directory, with everything wrong with it. */
@@ -172,18 +171,18 @@ export class Specs {
     /** Reads the specs in `directory`; `diff` gives the added lines of the rules' directory examples */
     static read(directory: string, diff: DirectoryDiff): Specs {
         const problems: string[] = TOP_LEVEL
-            .filter(name => ! existsSync(join(directory, name)))
+            .filter(name => ! isDirectory(join(directory, name)))
             .map(name => `${ name }/ is missing: a specs directory has cases/, rules/ and projects/`);
 
         const names = (top: typeof TOP_LEVEL[number]) => {
             const location = join(directory, top);
-            return existsSync(location) ? readdirSync(location).filter(name => ! name.startsWith('.') && statSync(join(location, name)).isDirectory()) : [];
+            return isDirectory(location) ? readdirSync(location).filter(name => ! name.startsWith('.') && isDirectory(join(location, name))) : [];
         };
         const each = <T>(top: typeof TOP_LEVEL[number], what: string, read: (location: string, name: string, shown: string) => T | undefined): Map<string, T> => {
             const location = join(directory, top);
-            const entries = existsSync(location) ? readdirSync(location).filter(name => ! name.startsWith('.')).sort() : [];
+            const entries = isDirectory(location) ? readdirSync(location).filter(name => ! name.startsWith('.')).sort() : [];
             return new Map(entries.flatMap(name => {
-                if (! statSync(join(location, name)).isDirectory()) {
+                if (! isDirectory(join(location, name))) {
                     problems.push(`${ top }/${ name } isn't ${ what }: ${ top }/ holds a directory for each`);
                     return [];
                 }

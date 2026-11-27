@@ -170,7 +170,7 @@ export function gitDirectoryDiff(run: typeof runCommand): DirectoryDiff {
 
 /** The files in a directory, by their paths relative to it, with `/` between directories, in order. */
 export function filesIn(directory: string): SourceFile[] {
-    if (! existsSync(directory)) {
+    if (! isDirectory(directory)) {
         return [];
     }
     return readdirSync(directory, { recursive: true, withFileTypes: true })
@@ -204,12 +204,12 @@ export class Example {
     }
 
     changeWith(diff: DirectoryDiff): Change {
-        if (statSync(this.location).isFile()) {
+        if (! isDirectory(this.location)) {
             return Change.ofNewFile(basename(this.location), readFileSync(this.location, 'utf8'));
         }
         const after = join(this.location, 'after');
         const before = join(this.location, 'before');
-        if (! existsSync(before)) {
+        if (! isDirectory(before)) {
             return Change.of(filesIn(after).map(file => Change.ofNewFile(file.path, file.content).files[0]));
         }
         const added = [ ...addedLinesOf(diff(this.location)) ].map(([ path, lines ]) => [ path.replace(/^after\//, ''), lines ] as const);
@@ -225,8 +225,11 @@ const EXAMPLE_VERDICTS = [
     { directory: 'n-a', verdict: Verdict.notApplicable },
 ] as const;
 
-const RULE_ENTRIES = [ 'README.md', 'rule.yml', 'applies.yml', ...EXAMPLE_VERDICTS.map(({ directory }) => directory) ];
-const EXAMPLE_ENTRIES = [ 'before', 'after', 'request.md', 'reply.md' ];
+const RULE_ENTRIES: Entries = {
+    'README.md': 'file', 'rule.yml': 'file', 'applies.yml': 'file',
+    ...Object.fromEntries(EXAMPLE_VERDICTS.map(({ directory }) => [ directory, 'directory' ])),
+};
+const EXAMPLE_ENTRIES: Entries = { before: 'directory', after: 'directory', 'request.md': 'file', 'reply.md': 'file' };
 
 /** The frontmatter of a rule's README.md */
 export interface RuleFrontmatter {
@@ -258,15 +261,27 @@ const ruleFile = (id: string, what: string) => onlyFields(
     { constraints: anObject, utils: anObject, message: aString, note: aString, fix: refused('a rule finds code, and changes none'), transform: refused('a rule finds code, and changes none') },
 );
 
-/** The names in a directory, in order, leaving out hidden ones, such as .DS_Store; none when there's no directory */
-const entriesIn = (directory: string): string[] => existsSync(directory) ? readdirSync(directory).filter(name => ! name.startsWith('.')).sort() : [];
+export const isFile = (location: string) => existsSync(location) && statSync(location).isFile();
+export const isDirectory = (location: string) => existsSync(location) && statSync(location).isDirectory();
 
-/** What's wrong with a directory's entries: those it must have, those it may, and anything else, with its file. */
-export function entryProblems(directory: string, shown: string, { required, allowed, what }: { required: readonly string[], allowed: readonly string[], what: string }): string[] {
-    const entries = entriesIn(directory);
+/** The names in a directory, in order, leaving out hidden ones, such as .DS_Store; none when it isn't a directory */
+const entriesIn = (directory: string): string[] => isDirectory(directory) ? readdirSync(directory).filter(name => ! name.startsWith('.')).sort() : [];
+
+/** The entries a directory may have, each a file or a directory */
+export type Entries = Record<string, 'file' | 'directory'>;
+
+/** What's wrong with a directory's entries: those it must have and doesn't, those of the wrong kind, and anything else. */
+export function entryProblems(directory: string, shown: string, { entries, required, what }: { entries: Entries, required: readonly string[], what: string }): string[] {
+    const found = entriesIn(directory);
     return [
-        ...required.filter(name => ! entries.includes(name)).map(name => `${ shown }/${ name } is missing`),
-        ...entries.filter(name => ! allowed.includes(name)).map(name => `${ shown }/${ name } isn't part of ${ what }`),
+        ...required.filter(name => ! found.includes(name)).map(name => `${ shown }/${ name } is missing`),
+        ...found.flatMap(name => {
+            if (! Object.hasOwn(entries, name)) {
+                return [ `${ shown }/${ name } isn't part of ${ what }` ];
+            }
+            const kind = isDirectory(join(directory, name)) ? 'directory' : 'file';
+            return kind === entries[name] ? [] : [ `${ shown }/${ name } is a ${ kind }, not a ${ entries[name] }` ];
+        }),
     ];
 }
 
@@ -278,19 +293,19 @@ export class Rule {
 
     /** Reads rules/<name>/, in `directory`, naming its files by `shown`, the rule's path in the specs directory */
     static read(directory: string, name: string, shown: string): Rule {
-        const problems: string[] = entryProblems(directory, shown, { required: [ 'README.md' ], allowed: RULE_ENTRIES, what: 'a rule, which holds README.md, rule.yml, applies.yml, pass/, fail/ and n-a/' });
+        const problems: string[] = entryProblems(directory, shown, { entries: RULE_ENTRIES, required: [ 'README.md' ], what: 'a rule, which holds README.md, rule.yml, applies.yml, pass/, fail/ and n-a/' });
 
         const readme = join(directory, 'README.md');
-        const { frontmatter, text, problems: readmeProblems } = existsSync(readme) ? Rule.readme(readFileSync(readme, 'utf8'), `${ shown }/README.md`) : { frontmatter: undefined, text: '', problems: [] };
+        const { frontmatter, text, problems: readmeProblems } = isFile(readme) ? Rule.readme(readFileSync(readme, 'utf8'), `${ shown }/README.md`) : { frontmatter: undefined, text: '', problems: [] };
         problems.push(...readmeProblems);
 
         const hasRule = existsSync(join(directory, 'rule.yml'));
-        const violations = hasRule ? Rule.ruleFile(join(directory, 'rule.yml'), `${ shown }/rule.yml`, name, "the rule's directory", problems) : undefined;
+        const violations = isFile(join(directory, 'rule.yml')) ? Rule.ruleFile(join(directory, 'rule.yml'), `${ shown }/rule.yml`, name, "the rule's directory", problems) : undefined;
         const hasApplies = existsSync(join(directory, 'applies.yml'));
         if (hasApplies && ! hasRule) {
             problems.push(`${ shown }/applies.yml has no rule.yml next to it, whose violations it says where the rule applies`);
         }
-        const applies = hasApplies && hasRule
+        const applies = isFile(join(directory, 'applies.yml')) && hasRule
             ? Rule.ruleFile(join(directory, 'applies.yml'), `${ shown }/applies.yml`, `${ name }.applies`, "the rule's directory and .applies", problems)
             : undefined;
         if (frontmatter?.followsTheProject && ! hasRule) {
@@ -313,22 +328,19 @@ export class Rule {
 
     /** The example at `location`, or undefined, with why in `problems`, when it isn't one */
     private static example(location: string, path: string, verdict: Verdict, problems: string[]): Example | undefined {
-        if (statSync(location).isFile()) {
+        if (! isDirectory(location)) {
             if (! location.endsWith('.ts')) {
                 problems.push(`${ path } isn't an example: one is a .ts file, or a directory with after/`);
                 return undefined;
             }
             return Example.at(location, path, verdict);
         }
-        const entries = entriesIn(location);
-        if (! entries.includes('after')) {
-            problems.push(entries.some(entry => EXAMPLE_ENTRIES.includes(entry))
-                ? `${ path }/after is missing`
-                : `${ path } isn't an example: one is a .ts file, or a directory with after/`);
+        if (! entriesIn(location).some(entry => Object.hasOwn(EXAMPLE_ENTRIES, entry))) {
+            problems.push(`${ path } isn't an example: one is a .ts file, or a directory with after/`);
             return undefined;
         }
-        problems.push(...entryProblems(location, path, { required: [], allowed: EXAMPLE_ENTRIES, what: 'an example, which holds before/, after/, request.md and reply.md' }));
-        return Example.at(location, path, verdict);
+        problems.push(...entryProblems(location, path, { entries: EXAMPLE_ENTRIES, required: [ 'after' ], what: 'an example, which holds before/, after/, request.md and reply.md' }));
+        return isDirectory(join(location, 'after')) ? Example.at(location, path, verdict) : undefined;
     }
 
     private static readme(content: string, file: string): { frontmatter: RuleFrontmatter | undefined, text: string, problems: string[] } {
