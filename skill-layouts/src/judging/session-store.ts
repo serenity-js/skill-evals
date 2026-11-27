@@ -1,9 +1,8 @@
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJson } from '../results.ts';
-import { type JudgeDirectory, type JudgePrompt, JudgeSession } from './judge.ts';
+import { JudgeSession } from './judge.ts';
 
 /** The judge a session ran: its agent, its model and the agent's version. */
 export class JudgeIdentity {
@@ -27,15 +26,11 @@ export class JudgeIdentity {
     }
 }
 
-/** What a session is reused by: the hash of the judge, the prompt, and everything in the judge's directory. */
+/** What a session is reused by: the hash of the judge, the prompt and everything the judge is given, as JudgeBrief makes it. */
 export class Fingerprint {
 
-    static of(identity: JudgeIdentity, prompt: JudgePrompt, directory: JudgeDirectory): Fingerprint {
-        return new Fingerprint(createHash('sha256')
-            .update(JSON.stringify(identity)).update('\0')
-            .update(prompt.text).update('\0')
-            .update(directory.hash())
-            .digest('hex'));
+    static of(value: string): Fingerprint {
+        return new Fingerprint(value);
     }
 
     readonly value: string;

@@ -22,11 +22,13 @@ import { Judge, JudgePrompt, type Spawn } from './judging/judge.ts';
 import { CalibrationProtocol } from './judging/protocol.ts';
 import { ReviewGuide } from './judging/review-guide.ts';
 import { JudgeIdentity } from './judging/session-store.ts';
+import { RecordedRounds } from './judging/recorded-round.ts';
 import { FixtureHistory, ProjectBuilder } from './judging/starting-project.ts';
+import { JudgeWorkspace, nodeFilesystem } from './judging/workspace.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
 import { compareResults } from './compare.ts';
-import { checkReference, type ReferenceCheck, renderReferenceCheck } from './references.ts';
+import { checkReference, type ReferenceCheck, referenceFilesOf, renderReferenceCheck, withoutMarkers } from './references.ts';
 import { loadRequests, type Request } from './requests.ts';
 import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, REVIEW_GUIDE, type RunKey, scoresTemplate } from './review.ts';
 import { harnessBlinding, harnessSkillDirectories } from './harness-skills.ts';
@@ -656,12 +658,13 @@ export function calibrationOf(args: Pick<Arguments, 'template' | 'out' | 'work'>
         protocol,
         checklist: { items: CHECKLIST.map(item => item.id), exercises: (request, item) => exercises(request, item as ChecklistItem) },
         requests: new Map([ ...requests, ...heldBack ].map(request => [ request.id, request ])),
-        projects: new ProjectBuilder(commands),
+        rounds: new RecordedRounds({ items: CHECKLIST.map(item => item.id), defaultPort: config.apiServer.port }),
+        references: { filesOf: request => withoutMarkers(referenceFilesOf(request)) },
+        projects: new ProjectBuilder(commands, hashOf),
         fixtures: new FixtureHistory(evalRoot, commands),
         template: args.template,
         work: args.work,
-        defaultPort: config.apiServer.port,
-        randomName: () => randomBytes(4).toString('hex'),
+        workspace: new JudgeWorkspace({ root: join(args.work, 'judge'), filesystem: nodeFilesystem(), randomName: () => randomBytes(4).toString('hex') }),
         log: logged,
     });
 }

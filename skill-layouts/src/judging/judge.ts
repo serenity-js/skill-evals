@@ -3,50 +3,23 @@
 // a reference solution. It's never told the layout, the agent or the run: the diff and the reply are blinded, and its
 // directory has a random name. Its verdicts don't count anywhere until a Calibration has compared them with the
 // reviewer's; see the README.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { AgentAdapter, AgentHomes } from '../agents/index.ts';
 import type { Finished, spawnWithTimeout } from '../child-processes.ts';
-import { hashOf } from '../conditions.ts';
-import type { Blinding } from '../review.ts';
 import type { SkillDirectories } from '../skill-directories.ts';
 import { agentEnvironment, modelProblem } from '../runs.ts';
 import type { Trace } from '../streams.ts';
-import { JudgeVerdicts, RuleVerdict } from './rule-verdict.ts';
-
-/** A rule, as the judge reads it: its id, and its README, which says what it asks for and how earlier decisions settled it. */
-export interface JudgeRule {
-    id: string;
-    readme: string;
-}
-
-/** What the judge is given about one change. */
-export interface JudgeInput {
-    /** The request, with the local API server's URLs filled in */
-    request: string;
-    diff: string;
-    reply: string;
-    /**
-     * Directories: the project as the agent found it, and as it left it. Without them, as for a recorded run whose
-     * project can't be rebuilt any more, the judge scores the change from its diff, as the reviewer's packet had it
-     */
-    before?: string;
-    after?: string;
-    /** Every rule, in the order the judge scores them: those the request exercises first */
-    rules: JudgeRule[];
-    /** The ids of the rules the request exercises */
-    exercised: string[];
-    /** A reference solution's files, by their paths in the project, without the marker of their expected value */
-    reference: Map<string, string>;
-}
+import { type JudgeVerdicts, RuleVerdict } from './rule-verdict.ts';
+import { type JudgeDirectory, VERDICTS_FILE } from './workspace.ts';
 
 /** What the judge is asked to do: score every rule, and write its verdicts to the directory's verdicts file. */
 export class JudgePrompt {
 
     /** For a change with its project before and after */
     static forProject(): JudgePrompt {
-        return new JudgePrompt(JudgePrompt.lines(JudgeDirectory.verdictsFile).join('\n'));
+        return new JudgePrompt(JudgePrompt.lines(VERDICTS_FILE).join('\n'));
     }
 
     /** For a change whose project isn't there, only its diff */
@@ -93,7 +66,7 @@ export class JudgePrompt {
 
     /** The prompt of a second session, when the first left no verdicts the harness can use, telling it what was wrong */
     retry(problems: readonly string[]): string {
-        const verdicts = JudgeDirectory.verdictsFile;
+        const verdicts = VERDICTS_FILE;
         return [
             this.text,
             '',
@@ -101,76 +74,6 @@ export class JudgePrompt {
             '',
             ...problems.map(problem => `- ${ problem }`),
         ].join('\n');
-    }
-}
-
-const NO_REPLY = '(none: the agent said nothing after its last tool call)';
-
-/** The project's files, without anything the harness or git put there. */
-const isProjectFile = (source: string) => ! source.split(/[/\\]/).some(part => part === '.git' || part === 'node_modules');
-
-/** The directory the judge works in, with what it's given, and the verdicts it leaves. */
-export class JudgeDirectory {
-
-    /** The file the judge writes its verdicts to */
-    static readonly verdictsFile = 'verdicts.json';
-
-    /** Writes what the judge is given into the empty directory at `path`, with its diff and reply blinded. */
-    static prepare(path: string, input: JudgeInput, blinding: Blinding): JudgeDirectory {
-        const write = (file: string, content: string) => {
-            mkdirSync(dirname(join(path, file)), { recursive: true });
-            writeFileSync(join(path, file), content);
-        };
-        mkdirSync(path, { recursive: true });
-        write('request.md', `${ input.request.trim() }\n`);
-        write('change.diff', blinding.blind(input.diff));
-        write('reply.md', `${ blinding.blind(input.reply).trim() || NO_REPLY }\n`);
-        for (const [ side, source ] of [ [ 'before', input.before ], [ 'after', input.after ] ] as const) {
-            if (source !== undefined) {
-                cpSync(source, join(path, side), { recursive: true, filter: isProjectFile });
-            }
-        }
-        for (const rule of input.rules) {
-            write(join('rules', rule.id, 'README.md'), `${ rule.readme.trim() }\n`);
-        }
-        const listed = (rules: JudgeRule[]) => rules.map(rule => `- [${ rule.id }](rules/${ rule.id }/README.md)`);
-        write('rules.md', [
-            '# The rules',
-            '',
-            '## The rules the request exercises',
-            '',
-            ...listed(input.rules.filter(rule => input.exercised.includes(rule.id))),
-            '',
-            '## The other rules, which apply wherever the added code is about them',
-            '',
-            ...listed(input.rules.filter(rule => ! input.exercised.includes(rule.id))),
-            '',
-        ].join('\n'));
-        for (const [ file, content ] of input.reference) {
-            write(join('reference', file), content);
-        }
-        return new JudgeDirectory(path);
-    }
-
-    readonly path: string;
-
-    private constructor(path: string) {
-        this.path = path;
-    }
-
-    /** The verdicts the judge left on `rules`, or what's wrong with them */
-    verdicts(rules: readonly string[]): JudgeVerdicts {
-        const file = join(this.path, JudgeDirectory.verdictsFile);
-        return JudgeVerdicts.read(existsSync(file) ? readFileSync(file, 'utf8') : undefined, rules, JudgeDirectory.verdictsFile);
-    }
-
-    /** The hash of everything in the directory, which is everything the judge is given */
-    hash(): string {
-        return hashOf(this.path);
-    }
-
-    remove(): void {
-        rmSync(this.path, { recursive: true, force: true });
     }
 }
 

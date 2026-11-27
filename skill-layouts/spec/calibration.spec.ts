@@ -14,7 +14,7 @@ import { Comparison } from '../src/judging/comparison.ts';
 import { JudgePrompt, type Spawn } from '../src/judging/judge.ts';
 import { renderCalibration } from '../src/judging/markdown.ts';
 import { CalibrationProtocol } from '../src/judging/protocol.ts';
-import { RecordedRound } from '../src/judging/recorded-round.ts';
+import { RecordedRound, RecordedRounds } from '../src/judging/recorded-round.ts';
 import { CalibrationReport } from '../src/judging/report.ts';
 import { GuideSection, ReviewGuide } from '../src/judging/review-guide.ts';
 import { RuleVerdict } from '../src/judging/rule-verdict.ts';
@@ -22,6 +22,9 @@ import { Share } from '../src/judging/share.ts';
 import { JudgeIdentity } from '../src/judging/session-store.ts';
 import { FixtureHistory, ProjectBuilder } from '../src/judging/starting-project.ts';
 import { Verdict, type VerdictName } from '../src/judging/verdict.ts';
+import { hashOf } from '../src/conditions.ts';
+import { harnessBlinding } from '../src/harness-skills.ts';
+import { referenceFilesOf, withoutMarkers } from '../src/references.ts';
 import { loadRequests } from '../src/requests.ts';
 import { REVIEW_GUIDE } from '../src/review.ts';
 
@@ -143,7 +146,7 @@ describe('calibrating the judge', () => {
         });
         afterEach(() => rmSync(dirname(dirname(round)), { recursive: true, force: true }));
 
-        const at = (directory: string) => RecordedRound.at(directory, { items: ITEMS, defaultPort: 4170 });
+        const at = (directory: string) => new RecordedRounds({ items: ITEMS, defaultPort: 4170 }).read(directory);
 
         it("names a round after its directory, or the round's, for a mode's results", () => {
             expect(RecordedRound.nameOf('/rounds/skill-layouts-focus/pilot')).toBe('skill-layouts-focus');
@@ -157,6 +160,15 @@ describe('calibrating the judge', () => {
             expect(reviewed.map(run => [ run.round, run.id, Object.fromEntries([ ...run.verdicts ].map(([ item, verdict ]) => [ item, verdict.name ])) ]))
                 .toEqual([ [ 'focus', 'aaaaaaaa', { 'grouping': 'n/a', 'structure': 'pass' } ] ]);
             expect([ ...reviewed[0].verdicts.keys() ]).toEqual(ITEMS.filter(item => [ 'grouping', 'structure' ].includes(item)));
+        });
+
+        it("reads each reviewed run's diff and reply into the round, which is a value that reads nothing more", () => {
+            write(join(round, 'runs', 'aaaaaaaa', 'diff.patch'), 'the diff\n');
+            write(join(round, 'runs', 'aaaaaaaa', 'reply.md'), 'the reply\n');
+            const read = at(round);
+            rmSync(join(round, 'runs'), { recursive: true });
+
+            expect(read.reviewedRuns[0]).toMatchObject({ diff: 'the diff\n', reply: 'the reply\n' });
         });
 
         it("reads the template's commit and the local API server's port the round recorded, or the default port without one", () => {
@@ -191,7 +203,7 @@ describe('calibrating the judge', () => {
         let template: string;
         let commit: string;
         let harness: string;
-        const projects = new ProjectBuilder(commands);
+        const projects = new ProjectBuilder(commands, hashOf);
 
         // a change to the fixture's spec, as it was before the fixture changed
         const diff = [
@@ -252,6 +264,17 @@ describe('calibrating the judge', () => {
             expect(read('after/package.json')).toBe('{}\n');
         });
 
+        it("hashes what it built, so the judge's brief tells one project from another without reading it", () => {
+            const one = projects.build(join(root, 'one'), { template, commit, versions: versionsOf('precision'), diff });
+            const same = projects.build(join(root, 'same'), { template, commit, versions: versionsOf('precision'), diff });
+            const unchanged = projects.build(join(root, 'unchanged'), { template, commit, versions: versionsOf('precision'), diff: '' });
+
+            expect(one.hashes).toEqual(same.hashes);
+            expect(one.hashes.before).not.toBe(unchanged.hashes.before);
+            expect(unchanged.hashes.after).toBe(unchanged.hashes.before);
+            expect(one.hashes.after).toBe(hashOf(join(root, 'one', 'after')));
+        });
+
         it('says why, version by version, when the diff applies to none', () => {
             expect(() => projects.build(join(root, 'project'), { template, commit, versions: versionsOf('precision'), diff: diff.replace('the first version', 'no version') }))
                 .toThrow(/doesn't apply to the template at [\da-f]+ with the precision fixture as it is: .+; the precision fixture as of/);
@@ -264,18 +287,26 @@ describe('calibrating the judge', () => {
             write(join(directory, 'review', 'scores.json'), JSON.stringify({ aaaaaaaa: { structure: 'pass' } }));
             write(join(directory, 'runs', 'aaaaaaaa', 'diff.patch'), diff);
             write(join(directory, 'runs', 'aaaaaaaa', 'reply.md'), 'I added the scenario.\n');
-            const [ reviewed ] = RecordedRound.at(directory, { items: ITEMS, defaultPort: 4170 }).reviewedRuns;
+            const [ reviewed ] = new RecordedRounds({ items: ITEMS, defaultPort: 4170 }).read(directory).reviewedRuns;
             const { rules } = ReviewGuide.parse(GUIDE, CHECKLIST);
+            const exercised = CHECKLIST.filter(item => item.requests.includes('4-new-http-api')).map(item => item.id);
 
-            const input = reviewed.judgeInput({ rules, request: requestOf('4-new-http-api'), port: 4170, project: undefined, exercises: (request, item) => exercises(request, item as ChecklistItem) });
+            const brief = reviewed.brief({
+                rules, request: requestOf('4-new-http-api'), port: 4170, project: undefined, exercises: (request, item) => exercises(request, item as ChecklistItem),
+                reference: withoutMarkers(referenceFilesOf('4-new-http-api')), blinding: harnessBlinding(),
+            });
+            const file = (path: string) => brief.files().find(each => each.path === path)?.content ?? '';
 
-            expect(input.request).toContain('http://127.0.0.1:4170/v1/latest?base=EUR&symbols=USD');
-            expect(input.diff).toBe(diff);
-            expect(input.reply).toBe('I added the scenario.\n');
-            expect(input).not.toHaveProperty('before');
-            expect(input.exercised).toEqual(CHECKLIST.filter(item => item.requests.includes('4-new-http-api')).map(item => item.id));
-            expect(input.rules.slice(0, input.exercised.length).map(rule => rule.id)).toEqual(input.exercised);
-            expect([ ...input.reference.values() ].join('\n')).not.toMatch(/\/\/ wrong:|\{\{frankfurter\}\}/);
+            expect(reviewed).toMatchObject({ diff, reply: 'I added the scenario.\n' });
+            expect(file('request.md')).toContain('http://127.0.0.1:4170/v1/latest?base=EUR&symbols=USD');
+            expect(file('change.diff')).toBe(diff);
+            expect(file('reply.md')).toBe('I added the scenario.\n');
+            expect(brief.hasProject()).toBe(false);
+            expect(brief.files().filter(each => each.path.startsWith('rules/')).slice(0, exercised.length).map(each => each.path)).toEqual(exercised.map(id => `rules/${ id }/README.md`));
+            expect(file('rules.md')).toContain(`## The rules the request exercises\n\n${ exercised.map(id => `- [${ id }](rules/${ id }/README.md)`).join('\n') }\n`);
+            const reference = brief.files().filter(each => each.path.startsWith('reference/'));
+            expect(reference).not.toHaveLength(0);
+            expect(reference.map(each => each.content).join('\n')).not.toMatch(/\/\/ wrong:|\{\{frankfurter\}\}/);
         });
     });
 

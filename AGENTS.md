@@ -34,6 +34,11 @@ that hold their data and the behaviour that uses it. `skill-layouts/src/judging/
   are: `Share.of(17, 20)`, `Verdict.of('pass')`, `JudgeIdentity.of(agent, model, version)`. Their fields are
   `readonly`, their constructors private, and each says how it's rendered and serialised, with `toString()` and
   `toJSON()`
+- **A static factory builds a value from data in memory only.** Anything that reads or writes files, runs a process
+  or uses the clock is an instance method of an object given those dependencies at construction. `JudgeBrief.of`
+  makes what the judge is given, as files and their contents, and `JudgeWorkspace.prepare` writes it, with the
+  filesystem operations the workspace was constructed with. Likewise, `RecordedRounds.read` reads a round's results,
+  and the `RecordedRound` it returns is a plain value
 - **Behaviour lives with the data it uses.** A ballot knows its majority, a comparison knows whether it agrees, and a
   share renders its own percentage, rather than functions elsewhere filtering plain structs. Compute a derived value
   once, where its data is, rather than every time it's needed

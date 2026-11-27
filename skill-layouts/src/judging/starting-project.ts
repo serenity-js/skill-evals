@@ -67,28 +67,34 @@ export class FixtureHistory {
 /** A run's project, rebuilt: as the run found it, as it left it, and with which version of its fixture. */
 export class StartingProject {
 
-    static of(directory: string, version: string): StartingProject {
-        return new StartingProject(join(directory, 'before'), join(directory, 'after'), version);
+    /** The project in `<directory>/before` and `<directory>/after`, built with `version` of its fixture, whose contents hash to `hashes` */
+    static of(directory: string, version: string, hashes: { before: string, after: string }): StartingProject {
+        return new StartingProject(join(directory, 'before'), join(directory, 'after'), version, hashes);
     }
 
     readonly before: string;
     readonly after: string;
     readonly version: string;
+    /** The hashes of the two directories' contents, which tell one project from another without reading them again */
+    readonly hashes: { readonly before: string, readonly after: string };
 
-    private constructor(before: string, after: string, version: string) {
+    private constructor(before: string, after: string, version: string, hashes: { before: string, after: string }) {
         this.before = before;
         this.after = after;
         this.version = version;
+        this.hashes = hashes;
     }
 }
 
-/** Rebuilds the projects recorded runs started from, with the commands it's given. */
+/** Rebuilds the projects recorded runs started from, with the commands it's given, and hashes what it built. */
 export class ProjectBuilder {
 
     private readonly commands: Commands;
+    private readonly hashOf: (directory: string) => string;
 
-    constructor(commands: Commands) {
+    constructor(commands: Commands, hashOf: (directory: string) => string) {
         this.commands = commands;
+        this.hashOf = hashOf;
     }
 
     /**
@@ -115,12 +121,12 @@ export class ProjectBuilder {
             version.copyTo(before);
             cpSync(before, after, { recursive: true });
             if (diff.trim() === '') {
-                return StartingProject.of(directory, version.label);
+                return this.built(directory, version.label);
             }
             git(after, [ 'init', '--quiet' ]);
             try {
                 git(after, [ 'apply', '--whitespace=nowarn', patch ]);
-                return StartingProject.of(directory, version.label);
+                return this.built(directory, version.label);
             }
             catch (error) {
                 reasons.push(`${ version.label }: ${ String((error as { stderr?: string }).stderr ?? '').trim().split('\n')[0] }`);
@@ -130,5 +136,10 @@ export class ProjectBuilder {
             }
         }
         throw new Error(`its diff doesn't apply to the template at ${ commit } with ${ reasons.join('; ') }`);
+    }
+
+    private built(directory: string, version: string): StartingProject {
+        rmSync(join(directory, 'after', '.git'), { recursive: true, force: true });
+        return StartingProject.of(directory, version, { before: this.hashOf(join(directory, 'before')), after: this.hashOf(join(directory, 'after')) });
     }
 }

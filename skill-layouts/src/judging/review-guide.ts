@@ -1,4 +1,4 @@
-import type { JudgeRule } from './judge.ts';
+import type { JudgeRule } from './brief.ts';
 
 /** A section of review-guide.md: its heading, the items its **Items** line names, its text, and the runs it cites. */
 export class GuideSection {
