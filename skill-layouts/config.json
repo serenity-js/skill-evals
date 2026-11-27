@@ -9,6 +9,10 @@
   "apiServer": {
     "port": 4170
   },
+  "judge": {
+    "agent": "kiro",
+    "model": "claude-sonnet-5.5"
+  },
   "runTimeoutMinutes": 30,
   "testTimeoutMinutes": 10
 }

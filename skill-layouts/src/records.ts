@@ -154,6 +154,7 @@ const CONFIG = fields({
     models: fields(Object.fromEntries(AGENTS.map(agent => [ agent, aString ]))),
     template: fields({ commit: aString }),
     apiServer: fields({ port: aPort }),
+    judge: fields({ agent: oneOf(AGENTS), model: aString }),
     runTimeoutMinutes: minutes,
     testTimeoutMinutes: minutes,
 });

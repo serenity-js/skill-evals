@@ -59,8 +59,8 @@ export function planRuns(
 const SKILL_PATH = /(?:(?:\.kiro|\.claude|\.agents|\.github)\/skills|node_modules\/@serenity-js\/[\w-]+\/skills)\/[\w./-]*/g;
 const SKILL_NAME = /\bserenity-js-[\da-z-]+/g;
 
-/** The diff with the paths and names of skills hidden, since they'd tell the reviewer the layout. */
-function blinded(text: string): string {
+/** The diff with the paths and names of skills hidden, since they'd tell the reviewer, or the judge, the layout. */
+export function blinded(text: string): string {
     return text.replace(SKILL_PATH, '[skill file]').replace(SKILL_NAME, '[skill]');
 }
 
@@ -110,7 +110,8 @@ export function scoresTemplate(runs: Array<{ id: string }>): ReviewScores {
         [ id, Object.fromEntries(CHECKLIST.map(item => [ item.id, '' ])) ]));
 }
 
-function asVerdict(value: string | undefined, item: string): Verdict | undefined {
+/** A reviewer's verdict, or undefined for one not given yet; anything other than pass, fail or n/a is refused. */
+export function asVerdict(value: string | undefined, item: string): Verdict | undefined {
     if (value === undefined || value === '') {
         return undefined;
     }

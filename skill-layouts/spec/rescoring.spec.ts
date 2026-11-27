@@ -12,7 +12,7 @@ import { agentVersionOf, type Config, rebuildWorkingCopy, rescoreNetworkFailures
 import { promptFor } from '../src/requests.ts';
 import type { PlannedRun } from '../src/review.ts';
 
-const config: Config = { models: { kiro: 'claude-sonnet-5.5', copilot: 'claude-sonnet-5.5' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, runTimeoutMinutes: 1, testTimeoutMinutes: 1 };
+const config: Config = { models: { kiro: 'claude-sonnet-5.5', copilot: 'claude-sonnet-5.5' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, judge: { agent: 'kiro', model: 'claude-sonnet-5.5' }, runTimeoutMinutes: 1, testTimeoutMinutes: 1 };
 const request = { id: '1-new-feature', kind: '', prompt: 'Add a scenario.', needs: [], apis: [ 'mathjs' as const ] };
 const run: PlannedRun = { id: '3f9c2a1e', agent: 'kiro', layout: 'b', request: '1-new-feature', repeat: 1 };
 const template = { name: 'template', scripts: { test: 'cross-env BASE_API_URL=http://api.mathjs.org/v4/ mocha' } };

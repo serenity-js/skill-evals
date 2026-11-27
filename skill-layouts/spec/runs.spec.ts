@@ -132,7 +132,28 @@ describe('parseArguments', () => {
             agent: undefined,
             checkReferencesOnly: false,
             unsandboxed: false,
+            calibrateOnly: false,
+            rounds: [],
         });
+    });
+
+    it("takes --calibrate with the rounds it judges, without the serenity-js clone, since it runs no evaluation", () => {
+        expect(parseArguments([ '--calibrate', '--rounds', 'focus/pilot,/rounds/regression/pilot', '--template', '/t', ...out ], '/cwd')).toMatchObject({
+            calibrateOnly: true,
+            rounds: [ '/cwd/focus/pilot', '/rounds/regression/pilot' ],
+            template: '/t',
+            out: '/out',
+        });
+    });
+
+    it.each([
+        [ 'without its rounds', [ '--calibrate' ] ],
+        [ 'rounds without --calibrate', [ '--rounds', 'focus/pilot', '--serenity-js', '/s' ] ],
+        [ 'with a mode', [ '--calibrate', '--rounds', 'focus/pilot', '--pilot' ] ],
+        [ 'with an agent', [ '--calibrate', '--rounds', 'focus/pilot', '--agent', 'kiro' ] ],
+        [ 'with another action', [ '--calibrate', '--rounds', 'focus/pilot', '--summarise' ] ],
+    ])('refuses --calibrate %s', (_, argv) => {
+        expect(() => parseArguments([ ...argv, ...out ], '/cwd')).toThrow(/usage|--calibrate and --rounds/);
     });
 
     it("takes --unsandboxed, for the checks where sandbox-exec isn't available, also with --check-references or --rescore", () => {
@@ -409,7 +430,7 @@ describe('agentsToRun', () => {
 
 describe('preflightProblems', () => {
 
-    const config = { models: { kiro: 'claude-sonnet-5.5', copilot: '' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, runTimeoutMinutes: 1, testTimeoutMinutes: 1 };
+    const config = { models: { kiro: 'claude-sonnet-5.5', copilot: '' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, judge: { agent: 'kiro' as const, model: 'claude-sonnet-5.5' }, runTimeoutMinutes: 1, testTimeoutMinutes: 1 };
 
     it("lets a Kiro-only pilot start without Copilot's pin, token or CLI, and checks only Kiro's", () => {
         expect(preflightProblems([ 'kiro' ], config, { KIRO_API_KEY: 'key' }, { home: '/nowhere', sandboxProblems: () => [] })).toEqual([]);

@@ -311,6 +311,87 @@ or failed:
 It exits non-zero, naming the failed checks, if any failed. It tells a run where the agent ignored the prompt, such
 as "the agent didn't load the skill", apart from a failure of the harness, such as "the parser found no tool calls".
 
+## Calibrating the judge
+
+The reviewer's packets are to be replaced by a judge: an agent, in a session of its own, that scores each run's change
+against the checklist. The judge's verdicts don't count anywhere until they've been compared with the reviewer's, item
+by item, on the rounds the reviewer scored. `--calibrate` makes that comparison. Nothing else uses the judge yet.
+
+```bash
+pnpm run eval:skill-layouts -- --calibrate --rounds ~/rounds/focus/pilot,~/rounds/copilot-check/pilot,~/rounds/regression/pilot \
+    --template ~/Projects/serenity-js-mocha-template --out ~/skill-layouts-calibration
+```
+
+`--rounds` takes the results of rounds the reviewer scored: each a mode's directory, with its `mapping.json`,
+`conditions.json`, `review/scores.json` and `runs/`. The round's name is its directory's, or its parent's for a mode,
+such as `focus` for `focus/pilot`. `--template` is a clone of the template with the rounds' commits. The judge is the
+agent and model `config.json` pins in `judge`, Kiro with `claude-sonnet-5.5`, so it needs `KIRO_API_KEY`.
+
+### What the judge is given
+
+For every run the reviewer scored at least one item of, the judge's directory holds what the reviewer's packet had,
+and the project:
+
+- `request.md`, the request, with the round's local API server's URLs filled in
+- `change.diff` and `reply.md`, the run's diff and its reply, with the skills' names and paths hidden, as in the packets
+- `before/` and `after/`, the project as the run found it and left it. That's the template at the round's commit, with
+  the newest version of the request's fixture, in the harness's history, that the run's diff applies to
+- `rules/<item>/README.md` for every item of the checklist: its text, then the sections of `review-guide.md` that name
+  it. `rules.md` lists the items the request exercises first
+- `reference/`, the request's reference solution, without the marker of its expected value
+
+The judge's directory has a random name, and the guide's run IDs are renamed `run R1`, `run R2` and so on, so the
+judge can't tell which run it's judging. It's told to write `verdicts.json`: a verdict, evidence and a reason for every
+item. When that can't be used, a second session is told what was wrong with it. A stream that reports a model other
+than the pin stops the calibration, as it stops an evaluation.
+
+A run whose diff applies to no version of its fixture is judged from the request, the diff and the reply alone, as the
+reviewer's packet had it, and the report lists it. That's 11 of the focus round's request 9 runs, made before
+`CalculationJobs` moved to `system-under-test/`: the harness's history starts after the move.
+
+### The protocol
+
+It was decided before the judge scored anything:
+
+- **Three sessions per run.** Their majority is compared with the reviewer's verdict. When no verdict has a majority,
+  it's a split, which counts as a disagreement. How often the sessions agree with each other is the judge's noise
+- **Held out.** `review-guide.md` cites runs of the very rounds being judged. A verdict is held out when the guide
+  doesn't cite its run under a section that names its item. Agreement is reported on every verdict, and on the
+  held-out ones, which are what the decisions use
+- **The prompt is frozen before the regression round is judged.** If the prompt needs to change, it's tuned on the
+  focus and copilot-check rounds only, and the regression round is judged once, afterwards. Each session records a
+  hash of its prompt and its inputs, and a rerun reuses only the sessions whose hash still matches, so a report never
+  mixes two prompts
+- **An item is calibrated when** the judge agrees with at least 85% of at least 10 held-out verdicts, and, where the
+  reviewer failed the item at least 3 times, the judge fails at least two thirds of those runs too
+- **An item the reviewer failed fewer than 3 times** is "calibrated against false alarms only": a judge that always
+  says pass would agree with every verdict. Its verdicts don't count until the judge also gets the item's examples
+  right, once the items have pass and fail examples of their own
+- **An item with fewer than 10 held-out verdicts** isn't calibrated: `timeout` has 7, and the reviewer scored none of
+  the pattern items but `answerable-parameters`
+
+The report goes in `<out>/calibration/calibration.md`, with everything it's made from in `calibration.json`:
+
+- per item: the reviewer's verdicts, the agreement on every verdict and on the held-out ones, the reviewer's fails the
+  judge caught, how often the sessions were unanimous, and the decision, with its reason
+- per round, the agreement
+- where the judge differs: the reviewer's pass and the judge's fail, the other way round, n/a on either side, splits,
+  and sessions without verdicts
+- every disagreement, with each session's verdict and reason, for the reviewer to read
+- the sessions, their retries and the credits they used
+
+Each session's stream, log, `session.json` and `verdicts.json` are in `<out>/calibration/sessions/<round>/<run>/<n>/`.
+A stopped calibration resumes from them. Every session gets a fresh `KIRO_HOME`. They share one `HOME`, in
+`<work>/homes/judge/`, so Kiro unpacks its runtime once, rather than about 300 MB per session.
+
+### What it costs
+
+The three recorded rounds have 56 reviewed runs, with 470 verdicts, of which 412 are held out, so a calibration is 168
+sessions, plus any retries. Each session reads up to 26 rules and a diff and writes one file. The agents' runs of the
+focus round took 0.7 to 1.3 credits and 30 to 50 seconds each. A judge's session does less, so expect roughly 0.5 to
+1.5 credits each, 85 to 250 credits in all, and a few hours, since the sessions run one at a time.
+`calibration.md` reports what they actually used.
+
 ## Options
 
 Run the evaluation from your own terminal, not from inside a sandbox: the harness runs `tsc` and `npm test` under
@@ -336,6 +417,9 @@ Run the evaluation from your own terminal, not from inside a sandbox: the harnes
   agent's planned runs only, and say so: a round run with `--agent kiro` leaves Copilot's planned runs without results
   for good, so the decision doesn't wait for them. Without `--agent`, they cover every agent's runs, say so, and the
   decision waits for all of them
+- `--calibrate --rounds <dir>,<dir>` judges the runs the reviewer scored in those rounds, and compares the judge's
+  verdicts with theirs, in `<out>/calibration/`: see [Calibrating the judge](#calibrating-the-judge). It takes
+  `--template`, `--out` and `--work`, and no mode, agent or other action
 - `--prepare-only` builds and checks everything up to the runs
 - `--summarise` only reads the results, and writes `summary.md` and `summary.json`. It never changes a run's
   `result.json`, so it's safe anywhere, including inside a sandbox. It honours `--agent`, as do the summaries
@@ -370,7 +454,7 @@ Run the evaluation from your own terminal, not from inside a sandbox: the harnes
   code calls the public APIs, so a rescore with the local server would still score the public APIs' latency. Inside
   a sandbox, it refuses, so it's safe there too
 
-`config.json` pins Kiro to `claude-sonnet-5.5`. Copilot's pin is `auto`, since the Copilot plan the evaluation ran
+`config.json` pins the judge, in `judge`, to Kiro with `claude-sonnet-5.5`. It pins Kiro to `claude-sonnet-5.5`. Copilot's pin is `auto`, since the Copilot plan the evaluation ran
 on only offers Copilot Fusion, which has no model ID of its own. Where a pin is a model, every model a stream reports has to match it, or the
 evaluation stops. With `auto`, the agent picks the model, and may pick another for layout C than for layout B, so
 `result.json` records every model each run used, in `models`, and the summary and `compare.md` break the results down
@@ -699,6 +783,11 @@ and keeps what 1.0.114 doesn't send but the SDK documents: `assistant.usage` eve
 Kiro's fixtures, `spec/fixtures/kiro-v3.pilot-*.jsonl` and `kiro-v3.smoke-974a67ed.jsonl`, are two of the pilot's
 streams and the smoke run whose skill load's `rawInput` was `{ name }`, trimmed: message chunks
 dropped, tool outputs and file contents replaced with `[trimmed]`.
+
+The judge's fixtures are `kiro-v3.judge.synthetic.jsonl`, written by hand in the shapes of Kiro's recorded events, for a
+session that reads its rules and writes `verdicts.json`, and `kiro-v3.judge-launch-error.jsonl`, recorded when Kiro
+couldn't start its engine inside another sandbox. A judge's session recorded by `--calibrate`, trimmed as the pilot's
+streams are, can replace the synthetic one.
 
 The recorded streams keep the paths they recorded. They come from before #3616 moved layout B's detail files under
 `references/`, so their reads of layout B are of `serenity-js-screenplay/tasks.md` and the like. The specs that check

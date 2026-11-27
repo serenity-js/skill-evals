@@ -2,6 +2,7 @@
 //                                  [--agent <kiro|copilot>] [--prepare-only | --summarise | --compare | --rescore | --reparse | --rescore-checks]
 //                                  --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]
 // pnpm run eval:skill-layouts -- --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]
+// pnpm run eval:skill-layouts -- --calibrate --rounds <dir>,<dir> --template <dir> --out <dir> [--work <dir>]
 //
 // Evaluates how a package's skills should be laid out: packs the Serenity/JS packages, gives them each layout's
 // skills, installs them into copies of the Mocha template, runs Kiro and GitHub Copilot on each request, and scores the
@@ -17,6 +18,7 @@ import { type AgentConditions, checkConditions, fixtureHashes, hashOf, lockfileH
 import { type Check, CHECKLIST, conventionsScore } from './conventions.ts';
 import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
+import { calibrate, CalibrationFiles } from './calibration.ts';
 import { compareResults } from './compare.ts';
 import { checkReference, type ReferenceCheck, renderReferenceCheck } from './references.ts';
 import { loadRequests, type Request } from './requests.ts';
@@ -53,20 +55,25 @@ export interface Arguments {
     checkReferencesOnly: boolean;
     /** Run tsc and npm test without a sandbox where sandbox-exec isn't available, rather than refuse to */
     unsandboxed: boolean;
+    /** Only judge the runs the reviewer scored in the rounds, and compare the judge's verdicts with theirs */
+    calibrateOnly: boolean;
+    /** The recorded rounds' results that --calibrate reads, each a mode's directory, such as `<round>/pilot` */
+    rounds: string[];
 }
 
 const USAGE = 'usage: eval:skill-layouts [--pilot [--layouts <list>] [--requests <list>] [--repeats <n>] | --smoke | --held-back <layout>] [--agent <kiro|copilot>] [--prepare-only | --summarise | --compare | --rescore | --reparse | --rescore-checks] --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]\n'
-    + '       eval:skill-layouts --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]';
+    + '       eval:skill-layouts --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]\n'
+    + '       eval:skill-layouts --calibrate --rounds <dir>,<dir> --template <dir> --out <dir> [--work <dir>]';
 
 export function parseArguments(argv: string[], cwd: string): Arguments {
     const options = new Map<string, string>();
     const flags = new Set<string>();
     for (let index = 0; index < argv.length; index++) {
         const argument = argv[index];
-        if ([ '--pilot', '--smoke', '--prepare-only', '--summarise', '--rescore', '--reparse', '--rescore-checks', '--check-references', '--compare', '--unsandboxed' ].includes(argument)) {
+        if ([ '--pilot', '--smoke', '--prepare-only', '--summarise', '--rescore', '--reparse', '--rescore-checks', '--check-references', '--compare', '--unsandboxed', '--calibrate' ].includes(argument)) {
             flags.add(argument);
         }
-        else if ([ '--serenity-js', '--template', '--out', '--work', '--held-back', '--agent', '--layouts', '--requests', '--repeats' ].includes(argument) && argv[index + 1] && ! argv[index + 1].startsWith('--')) {
+        else if ([ '--serenity-js', '--template', '--out', '--work', '--held-back', '--agent', '--layouts', '--requests', '--repeats', '--rounds' ].includes(argument) && argv[index + 1] && ! argv[index + 1].startsWith('--')) {
             options.set(argument, argv[++index]);
         }
         else if (argument !== '--') {
@@ -129,8 +136,17 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
     if (checkReferencesOnly && ([ ...flags ].filter(flag => flag !== '--unsandboxed').length > 1 || heldBack !== undefined || agent !== undefined)) {
         throw new Error(USAGE);
     }
+    // it runs the judge only, on the rounds' recorded runs, so it takes no mode, agent or other action
+    const calibrateOnly = flags.has('--calibrate');
+    const rounds = listOf('--rounds', 'round');
+    if (calibrateOnly && ([ ...flags ].length > 1 || heldBack !== undefined || agent !== undefined || layouts || pilotRequests || repeatsOption !== undefined)) {
+        throw new Error(USAGE);
+    }
+    if (calibrateOnly !== (rounds !== undefined)) {
+        throw new Error(`--calibrate and --rounds <dir>,<dir> go together: the recorded rounds' results, each a mode's directory, such as <round>/pilot\n${ USAGE }`);
+    }
     const serenityJs = options.get('--serenity-js');
-    if (! serenityJs && ! summariseOnly && ! rescoreOnly && ! reparseOnly && ! compareOnly && ! rescoreChecksOnly) {
+    if (! serenityJs && ! calibrateOnly && ! summariseOnly && ! rescoreOnly && ! reparseOnly && ! compareOnly && ! rescoreChecksOnly) {
         throw new Error(`--serenity-js <clone> is required: a compiled clone of serenity-js/serenity-js on the branch with the skills\n${ USAGE }`);
     }
     const out = options.get('--out');
@@ -154,6 +170,8 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
         agent: agent as Agent | undefined,
         checkReferencesOnly,
         unsandboxed: flags.has('--unsandboxed'),
+        calibrateOnly,
+        rounds: (rounds ?? []).map(round => resolve(cwd, round)),
     };
 }
 
@@ -597,11 +615,32 @@ export async function checkReferences(
     log(`all ${ checks.length } reference solutions pass, and fail with their expected values made wrong`);
 }
 
+/**
+ * Judges every run the reviewer scored in the recorded rounds, three times, and compares the judge's verdicts with
+ * theirs, item by item, in <out>/calibration/calibration.md. It runs the judge's agent, so it needs its credential.
+ */
+export async function calibrateJudge(args: Arguments, { config = loadConfig(), env = process.env }: { config?: Config, env?: NodeJS.ProcessEnv } = {}): Promise<void> {
+    const problem = adapterOf(config.judge.agent).credentialProblem(env);
+    if (problem) {
+        throw new Error(`nothing judged: ${ problem }`);
+    }
+    for (const round of args.rounds) {
+        if (! existsSync(join(round, 'mapping.json'))) {
+            throw new Error(`${ round } isn't a round's results: it has no mapping.json`);
+        }
+    }
+    await calibrate({ rounds: args.rounds, template: args.template, out: args.out, work: args.work, config, env, log });
+    log(`the judge's verdicts compared with the reviewer's: ${ new CalibrationFiles(args.out).markdown }`);
+}
+
 if (import.meta.main) {
     try {
         const args = parseArguments(process.argv.slice(2), process.cwd());
         const store = Results.of(args.out, args.mode);
-        if (args.compareOnly) {
+        if (args.calibrateOnly) {
+            await calibrateJudge(args);
+        }
+        else if (args.compareOnly) {
             store.saveCompare(compareResults(store.directory, { agent: args.agent }));
             log(`the layouts compared, request by request: ${ store.compareMarkdown }`);
         }

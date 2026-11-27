@@ -48,6 +48,11 @@ export function markersIn(files: Map<string, string>): Marker[] {
     }));
 }
 
+/** The reference's files without the marker of their expected value, as an exemplar shows them: the code alone. */
+export function withoutMarkers(files: Map<string, string>): Map<string, string> {
+    return new Map([ ...files ].map(([ file, content ]) => [ file, content.split('\n').map(line => line.replace(MARKER, '')).join('\n') ]));
+}
+
 /** The reference's files with its expected value made wrong, as its one marker says, and nothing else changed. */
 export function madeWrong(files: Map<string, string>): Map<string, string> {
     const markers = markersIn(files);

@@ -154,7 +154,7 @@ describe('the files the harness reads', () => {
 
     describe('loadConfig', () => {
 
-        const config = { models: { kiro: 'claude-sonnet-5.5', copilot: 'auto' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, runTimeoutMinutes: 30, testTimeoutMinutes: 10 };
+        const config = { models: { kiro: 'claude-sonnet-5.5', copilot: 'auto' }, template: { commit: 'abc' }, apiServer: { port: 4170 }, judge: { agent: 'kiro', model: 'claude-sonnet-5.5' }, runTimeoutMinutes: 30, testTimeoutMinutes: 10 };
 
         it('reads config.json', () => {
             write('config.json', config);
@@ -167,6 +167,8 @@ describe('the files the harness reads', () => {
             [ 'a missing template commit', { ...config, template: {} }, 'template.commit is missing' ],
             [ 'a port that is not one', { ...config, apiServer: { port: '4170' } }, 'apiServer.port is "4170", not a port, 1 to 65535' ],
             [ 'a timeout that is not a number of minutes', { ...config, runTimeoutMinutes: 0 }, 'runTimeoutMinutes is 0, not a number of minutes, more than 0' ],
+            [ 'a judge that is not an agent', { ...config, judge: { agent: 'claude', model: 'claude-sonnet-5.5' } }, 'judge.agent is "claude", not one of kiro, copilot' ],
+            [ "a missing judge's model", { ...config, judge: { agent: 'kiro' } }, 'judge.model is missing' ],
         ])('names the field and the file for %s', (_, content, problem) => {
             const file = write('config.json', content);
 
