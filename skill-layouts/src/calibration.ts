@@ -289,8 +289,10 @@ export interface ItemCalibration {
     /** The judge's majority agrees with the reviewer, of the verdicts it gave a majority or a split on */
     agreement: Share;
     heldOut: Share;
-    /** Of the reviewer's fails, how many the judge's majority failed too */
+    /** Of the reviewer's fails, how many the judge's majority failed too, in every run, for the report */
     failsCaught: Share;
+    /** The same, of the held-out verdicts only, which the decision uses: the guide cites the others' failures to the judge */
+    heldOutFailsCaught: Share;
     /** Split and incomplete results count against the agreement; missing ones, where no session gave a verdict, don't count at all */
     confusion: { reviewerPassJudgeFail: number, reviewerFailJudgePass: number, otherNa: number, split: number, incomplete: number, missing: number };
     /** Of the runs with two sessions' verdicts or more, how many had every session agree */
@@ -339,7 +341,7 @@ function agreementOf(entries: CalibrationEntry[]): Share {
 }
 
 /** The protocol's decision about an item, from its counts, as the README's "Calibrating the judge" says. */
-export function statusOf({ heldOut, failsCaught }: Pick<ItemCalibration, 'heldOut' | 'failsCaught'>): { status: CalibrationStatus, why: string } {
+export function statusOf({ heldOut, heldOutFailsCaught: failsCaught }: Pick<ItemCalibration, 'heldOut' | 'heldOutFailsCaught'>): { status: CalibrationStatus, why: string } {
     if (heldOut.of < MIN_HELD_OUT) {
         return { status: 'too few held-out verdicts', why: `${ heldOut.of } held-out verdict${ heldOut.of === 1 ? '' : 's' }, of the ${ MIN_HELD_OUT } it needs` };
     }
@@ -349,13 +351,13 @@ export function statusOf({ heldOut, failsCaught }: Pick<ItemCalibration, 'heldOu
     if (failsCaught.of < MIN_FAILS) {
         return {
             status: 'calibrated against false alarms only',
-            why: `the reviewer failed it ${ failsCaught.of } time${ failsCaught.of === 1 ? '' : 's' }, fewer than ${ MIN_FAILS }, so the agreement can't show that the judge tells a failure`,
+            why: `the reviewer failed it in ${ failsCaught.of } held-out verdict${ failsCaught.of === 1 ? '' : 's' }, fewer than ${ MIN_FAILS }, so the agreement can't show that the judge tells a failure`,
         };
     }
     if (failsCaught.count < CAUGHT * failsCaught.of) {
-        return { status: 'not calibrated', why: `fails ${ shareOf(failsCaught) } of the runs the reviewer failed, under two thirds` };
+        return { status: 'not calibrated', why: `fails ${ shareOf(failsCaught) } of the held-out runs the reviewer failed, under two thirds` };
     }
-    return { status: 'calibrated', why: `agrees with ${ shareOf(heldOut) } held-out verdicts, and fails ${ shareOf(failsCaught) } of the reviewer's fails` };
+    return { status: 'calibrated', why: `agrees with ${ shareOf(heldOut) } held-out verdicts, and fails ${ shareOf(failsCaught) } of the held-out runs the reviewer failed` };
 }
 
 /** How the judge's verdicts compare with the reviewer's, item by item and round by round, with every disagreement. */
@@ -372,6 +374,7 @@ export function calibrationReport(
             agreement: agreementOf(ofItem),
             heldOut: agreementOf(ofItem.filter(entry => entry.heldOut)),
             failsCaught: { count: fails.filter(entry => majority(entry) === 'fail').length, of: fails.length },
+            heldOutFailsCaught: { count: fails.filter(entry => entry.heldOut && majority(entry) === 'fail').length, of: fails.filter(entry => entry.heldOut).length },
         };
         return {
             item,
@@ -418,13 +421,13 @@ export function renderCalibration(report: CalibrationReport): string {
         '',
         `The judge is ${ report.judge.agent } ${ report.judge.version }, with ${ report.judge.model }, compared with the reviewer's verdicts in each round's review/scores.json.`,
         `Each run is judged by ${ REPEATS } sessions, and their majority is compared. A verdict is held out when review-guide.md doesn't cite its run under a section that names its item.`,
-        `An item is calibrated when the judge agrees with at least ${ AGREEMENT * 100 }% of at least ${ MIN_HELD_OUT } held-out verdicts, and, where the reviewer failed it at least ${ MIN_FAILS } times, fails at least two thirds of those runs too.`,
+        `An item is calibrated when the judge agrees with at least ${ AGREEMENT * 100 }% of at least ${ MIN_HELD_OUT } held-out verdicts, and, where the reviewer failed it in at least ${ MIN_FAILS } held-out verdicts, fails at least two thirds of those runs too.`,
         '',
         '## Items',
         '',
-        '| Item | Reviewer: pass / fail / n/a | Agreement | Held out | Reviewer\'s fails caught | Sessions unanimous | Status |',
-        '|---|---|---|---|---|---|---|',
-        ...report.items.map(item => `| ${ item.item } | ${ verdictCounts(item.reviewer) } | ${ shareOf(item.agreement) } | ${ shareOf(item.heldOut) } | ${ shareOf(item.failsCaught) } | ${ shareOf(item.unanimous) } | ${ item.status }: ${ item.why } |`),
+        '| Item | Reviewer: pass / fail / n/a | Agreement | Held out | Reviewer\'s fails caught | Held-out fails caught | Sessions unanimous | Status |',
+        '|---|---|---|---|---|---|---|---|',
+        ...report.items.map(item => `| ${ item.item } | ${ verdictCounts(item.reviewer) } | ${ shareOf(item.agreement) } | ${ shareOf(item.heldOut) } | ${ shareOf(item.failsCaught) } | ${ shareOf(item.heldOutFailsCaught) } | ${ shareOf(item.unanimous) } | ${ item.status }: ${ item.why } |`),
         '',
         '## Rounds',
         '',

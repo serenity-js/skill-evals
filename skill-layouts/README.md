@@ -365,9 +365,11 @@ It was decided before the judge scored anything:
   hash of its prompt and its inputs, and a rerun reuses only the sessions whose hash still matches, so a report never
   mixes two prompts
 - **An item is calibrated when** the judge agrees with at least 85% of at least 10 held-out verdicts, and, where the
-  reviewer failed the item at least 3 times, the judge fails at least two thirds of those runs too
-- **An item the reviewer failed fewer than 3 times** is "calibrated against false alarms only": a judge that always
-  says pass would agree with every verdict. Its verdicts don't count until the judge also gets the item's examples
+  reviewer failed the item in at least 3 held-out verdicts, the judge fails at least two thirds of those runs too.
+  The fails the guide cites don't count towards the decision, since the judge's rules describe them, but the report
+  counts the fails it caught in every run too
+- **An item the reviewer failed in fewer than 3 held-out verdicts** is "calibrated against false alarms only": a
+  judge that always says pass would agree with every verdict. Its verdicts don't count until the judge also gets the item's examples
   right, once the items have pass and fail examples of their own
 - **An item with fewer than 10 held-out verdicts** isn't calibrated: `timeout` has 7, and the reviewer scored none of
   the pattern items but `answerable-parameters`
@@ -375,7 +377,8 @@ It was decided before the judge scored anything:
 The report goes in `<out>/calibration/calibration.md`, with everything it's made from in `calibration.json`:
 
 - per item: the reviewer's verdicts, the agreement on every verdict and on the held-out ones, the reviewer's fails the
-  judge caught, how often the sessions were unanimous, and the decision, with its reason
+  judge caught, in every run and in the held-out ones, how often the sessions were unanimous, and the decision, with
+  its reason
 - per round, the agreement
 - where the judge differs: the reviewer's pass and the judge's fail, the other way round, n/a on either side, splits,
   and sessions without verdicts
