@@ -362,8 +362,9 @@ It was decided before the judge scored anything:
   held-out ones, which are what the decisions use
 - **The prompt is frozen before the regression round is judged.** If the prompt needs to change, it's tuned on the
   focus and copilot-check rounds only, and the regression round is judged once, afterwards. Each session records a
-  hash of its prompt and its inputs, and a rerun reuses only the sessions whose hash still matches, so a report never
-  mixes two prompts
+  hash of the judge, its agent, model and version, of its prompt and of its inputs, and a rerun reuses only the
+  sessions whose hash still matches. So a report never mixes two prompts, and never reports one judge's verdicts under
+  another's name
 - **An item is calibrated when** the judge agrees with at least 85% of at least 10 held-out verdicts, and, where the
   reviewer failed the item in at least 3 held-out verdicts, the judge fails at least two thirds of those runs too.
   The fails the guide cites don't count towards the decision, since the judge's rules describe them, but the report

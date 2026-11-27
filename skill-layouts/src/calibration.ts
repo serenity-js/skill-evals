@@ -494,10 +494,21 @@ export class CalibrationFiles {
     }
 }
 
+/** The judge a session ran: its agent, its model and the agent's version. */
+export interface JudgeIdentity {
+    agent: string;
+    model: string;
+    version: string;
+}
+
 /** What a session leaves in its directory, besides its streams and logs. */
 interface SavedSession extends JudgeSession {
-    /** The hash of the prompt and of everything the judge was given, so a session of another prompt or other inputs isn't reused */
+    /**
+     * The hash of the judge, the prompt and everything the judge was given, so a session of another judge, another
+     * prompt or other inputs isn't reused
+     */
     inputHash: string;
+    judge: JudgeIdentity;
 }
 
 export interface CalibrateOptions {
@@ -550,6 +561,7 @@ export async function calibrate(options: CalibrateOptions): Promise<CalibrationR
     const files = new CalibrationFiles(out);
     const scratch = join(work, 'calibration');
     const homes = prepareAgentHomes(join(work, 'homes', 'judge'), new Work(work).npmCache);
+    const judgeIdentity: JudgeIdentity = { agent: config.judge.agent, model: config.judge.model, version: options.judgeVersion ?? versionOf(adapterOf(config.judge.agent)) };
 
     const entries: CalibrationEntry[] = [];
     const withoutProject: CalibrationReport['withoutProject'] = [];
@@ -585,7 +597,11 @@ export async function calibrate(options: CalibrateOptions): Promise<CalibrationR
             for (let repeat = 1; repeat <= repeats; repeat++) {
                 const judgeDirectory = join(work, 'judge', randomBytes(4).toString('hex'));
                 prepareJudgeDirectory(judgeDirectory, input);
-                const inputHash = createHash('sha256').update(prompt).update('\0').update(hashOf(judgeDirectory)).digest('hex');
+                const inputHash = createHash('sha256')
+                    .update(JSON.stringify(judgeIdentity)).update('\0')
+                    .update(prompt).update('\0')
+                    .update(hashOf(judgeDirectory))
+                    .digest('hex');
                 const output = files.session(round, run.run.id, repeat);
                 const saved = savedSession(output);
                 let session: JudgeSession;
@@ -597,7 +613,7 @@ export async function calibrate(options: CalibrateOptions): Promise<CalibrationR
                     rmSync(output, { recursive: true, force: true });
                     freshAgentHome(homes, config.judge.agent);
                     session = await judge(judgeDirectory, rules.map(rule => rule.id), { config, homes, output, env, spawn, prompt });
-                    writeJson(join(output, 'session.json'), { inputHash, ...session });
+                    writeJson(join(output, 'session.json'), { inputHash, judge: judgeIdentity, ...session });
                     if (session.verdicts) {
                         writeJson(join(output, 'verdicts.json'), { verdicts: session.verdicts });
                     }
@@ -627,7 +643,7 @@ export async function calibrate(options: CalibrateOptions): Promise<CalibrationR
     }
 
     const report = calibrationReport(entries, {
-        judge: { agent: config.judge.agent, model: config.judge.model, version: options.judgeVersion ?? versionOf(adapterOf(config.judge.agent)) },
+        judge: judgeIdentity,
         sessions,
         withoutProject,
     });

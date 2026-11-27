@@ -373,14 +373,14 @@ describe('calibrating the judge', () => {
         afterEach(() => rmSync(root, { recursive: true, force: true }));
 
         /** A judge that passes structure and leaves every other rule n/a, and remembers what it was given. */
-        function fakeJudge() {
+        function fakeJudge(model = 'claude-sonnet-5.5') {
             const seen: string[] = [];
             const prompts: string[] = [];
             const spawn: Spawn = async (command, args, options) => {
                 const after = join(options.cwd, 'after', 'README.md');
                 seen.push(existsSync(after) ? readFileSync(after, 'utf8') : '(no project)');
                 prompts.push(args.at(-1)!);
-                writeFileSync(options.stdout, readFileSync(join(import.meta.dirname, 'fixtures', 'kiro-v3.judge.synthetic.jsonl')));
+                writeFileSync(options.stdout, readFileSync(join(import.meta.dirname, 'fixtures', 'kiro-v3.judge.synthetic.jsonl'), 'utf8').replaceAll('claude-sonnet-5.5', model));
                 writeFileSync(options.stderr, '');
                 writeFileSync(join(options.cwd, 'verdicts.json'), JSON.stringify({ verdicts: CHECKLIST.map(item => item.id === 'structure'
                     ? { rule: item.id, verdict: 'pass', evidence: [ 'after/README.md:1: Node.js 22 or later' ], reason: 'It changes only the README.' }
@@ -428,6 +428,21 @@ describe('calibrating the judge', () => {
             const changed = fakeJudge();
             await calibrate(options(changed.spawn));
             expect(changed.seen).toEqual([ 'Node.js 22 or later\n', 'Node.js 22 or later\n' ]);
+        });
+
+        it("judges again when the judge's agent, model or version changes, rather than reporting the old judge's verdicts as the new one's", async () => {
+            await calibrate(options(fakeJudge().spawn));
+
+            const newVersion = fakeJudge();
+            await calibrate({ ...options(newVersion.spawn), judgeVersion: 'kiro-cli 3.6.0' });
+            expect(newVersion.seen.slice(0, 2)).toEqual([ 'Node.js 22 or later\n', 'Node.js 22 or later\n' ]);
+
+            const newModel = fakeJudge('claude-opus-5.5');
+            const report = await calibrate({ ...options(newModel.spawn), judgeVersion: 'kiro-cli 3.6.0', config: { ...config, judge: { agent: 'kiro', model: 'claude-opus-5.5' } } });
+            expect(newModel.seen).toHaveLength(4);
+            expect(report.judge).toEqual({ agent: 'kiro', model: 'claude-opus-5.5', version: 'kiro-cli 3.6.0' });
+            expect(JSON.parse(readFileSync(join(new CalibrationFiles(join(root, 'out')).session('regression', 'aaaaaaaa', 1), 'session.json'), 'utf8')).judge)
+                .toEqual({ agent: 'kiro', model: 'claude-opus-5.5', version: 'kiro-cli 3.6.0' });
         });
 
         it('refuses two rounds of the same name', async () => {
