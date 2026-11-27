@@ -9,7 +9,8 @@ import { dirname, join } from 'node:path';
 import type { AgentAdapter, AgentHomes } from '../agents/index.ts';
 import type { Finished, spawnWithTimeout } from '../child-processes.ts';
 import { hashOf } from '../conditions.ts';
-import { blinded } from '../review.ts';
+import type { Blinding } from '../review.ts';
+import type { SkillDirectories } from '../skill-directories.ts';
 import { agentEnvironment, modelProblem } from '../runs.ts';
 import type { Trace } from '../streams.ts';
 import { JudgeVerdicts, RuleVerdict } from './rule-verdict.ts';
@@ -114,16 +115,16 @@ export class JudgeDirectory {
     /** The file the judge writes its verdicts to */
     static readonly verdictsFile = 'verdicts.json';
 
-    /** Writes what the judge is given into the empty directory at `path`. */
-    static prepare(path: string, input: JudgeInput): JudgeDirectory {
+    /** Writes what the judge is given into the empty directory at `path`, with its diff and reply blinded. */
+    static prepare(path: string, input: JudgeInput, blinding: Blinding): JudgeDirectory {
         const write = (file: string, content: string) => {
             mkdirSync(dirname(join(path, file)), { recursive: true });
             writeFileSync(join(path, file), content);
         };
         mkdirSync(path, { recursive: true });
         write('request.md', `${ input.request.trim() }\n`);
-        write('change.diff', blinded(input.diff));
-        write('reply.md', `${ blinded(input.reply).trim() || NO_REPLY }\n`);
+        write('change.diff', blinding.blind(input.diff));
+        write('reply.md', `${ blinding.blind(input.reply).trim() || NO_REPLY }\n`);
         for (const [ side, source ] of [ [ 'before', input.before ], [ 'after', input.after ] ] as const) {
             if (source !== undefined) {
                 cpSync(source, join(path, side), { recursive: true, filter: isProjectFile });
@@ -307,6 +308,8 @@ export interface JudgeDependencies {
     /** How long each attempt may take */
     timeoutMs: number;
     prompt: JudgePrompt;
+    /** The skill directories its agent's stream is parsed with */
+    skills: SkillDirectories;
 }
 
 /** An agent that judges changes. */
@@ -333,7 +336,7 @@ export class Judge {
      * wrong. A model other than the judge's stops the calibration, as it stops an evaluation.
      */
     async judge(directory: JudgeDirectory, rules: readonly string[], output: string): Promise<JudgeSession> {
-        const { adapter, model, homes, spawn, env, timeoutMs, prompt } = this.dependencies;
+        const { adapter, model, homes, spawn, env, timeoutMs, prompt, skills } = this.dependencies;
         this.freshHome();
         mkdirSync(output, { recursive: true });
         const attempts: JudgeAttempt[] = [];
@@ -349,7 +352,7 @@ export class Judge {
                 stderr: file('agent', 'log'),
                 timeoutMs,
             });
-            const trace = adapter.parseStream(readFileSync(stream, 'utf8'), { timedOut: finished.timedOut });
+            const trace = adapter.parseStream(readFileSync(stream, 'utf8'), { timedOut: finished.timedOut, skills });
             const reported = modelProblem(model, trace.models);
             if (reported.stop) {
                 throw new Error(`the judge's session in ${ output }: ${ reported.stop }`);

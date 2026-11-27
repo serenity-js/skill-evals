@@ -7,9 +7,11 @@ import { adapterOf, prepareAgentHomes } from '../src/agents/index.ts';
 import type { Finished } from '../src/child-processes.ts';
 import { Judge, JudgeDirectory, type JudgeInput, JudgePrompt, type Spawn } from '../src/judging/judge.ts';
 import { JudgeVerdicts, RuleVerdict } from '../src/judging/rule-verdict.ts';
+import { harnessBlinding, harnessSkillDirectories } from '../src/harness-skills.ts';
 import { Verdict } from '../src/judging/verdict.ts';
 
 const fixture = (name: string) => join(import.meta.dirname, 'fixtures', name);
+const blinding = harnessBlinding();
 
 const RULES = [ 'awaiting', 'no-console-log' ];
 const verdicts = [
@@ -113,7 +115,7 @@ describe('the judge', () => {
         const readFile = (path: string) => readFileSync(join(root, 'judge', path), 'utf8');
 
         it('gives the judge the request, the change, the reply, the project before and after, the rules and the reference', () => {
-            JudgeDirectory.prepare(join(root, 'judge'), input);
+            JudgeDirectory.prepare(join(root, 'judge'), input, blinding);
 
             expect(readFile('request.md')).toBe('Add a scenario that checks that 2 times 3 is 6.\n');
             expect(readFile('before/spec/sum.spec.ts')).toBe('// before\n');
@@ -123,7 +125,7 @@ describe('the judge', () => {
         });
 
         it("hides the skills' names and paths in the change and the reply, as the review packets do", () => {
-            JudgeDirectory.prepare(join(root, 'judge'), input);
+            JudgeDirectory.prepare(join(root, 'judge'), input, blinding);
 
             expect(readFile('change.diff')).not.toMatch(/serenity-js-|\.kiro\/skills/);
             expect(readFile('change.diff')).toContain('[skill file]');
@@ -131,7 +133,7 @@ describe('the judge', () => {
         });
 
         it('leaves out git and node_modules, where the skills are installed', () => {
-            JudgeDirectory.prepare(join(root, 'judge'), input);
+            JudgeDirectory.prepare(join(root, 'judge'), input, blinding);
 
             for (const side of [ 'before', 'after' ]) {
                 expect(existsSync(join(root, 'judge', side, '.git'))).toBe(false);
@@ -140,7 +142,7 @@ describe('the judge', () => {
         });
 
         it('lists the rules the request exercises first', () => {
-            JudgeDirectory.prepare(join(root, 'judge'), input);
+            JudgeDirectory.prepare(join(root, 'judge'), input, blinding);
 
             const rules = readFile('rules.md');
             expect(rules.indexOf('[awaiting]')).toBeLessThan(rules.indexOf('[no-console-log]'));
@@ -148,13 +150,13 @@ describe('the judge', () => {
         });
 
         it("says so when the agent didn't reply", () => {
-            JudgeDirectory.prepare(join(root, 'judge'), { ...input, reply: '' });
+            JudgeDirectory.prepare(join(root, 'judge'), { ...input, reply: '' }, blinding);
 
             expect(readFile('reply.md')).toBe('(none: the agent said nothing after its last tool call)\n');
         });
 
         it("gives the judge no project for a change whose project can't be rebuilt, only its diff", () => {
-            JudgeDirectory.prepare(join(root, 'judge'), { ...input, before: undefined, after: undefined });
+            JudgeDirectory.prepare(join(root, 'judge'), { ...input, before: undefined, after: undefined }, blinding);
 
             expect(existsSync(join(root, 'judge', 'before'))).toBe(false);
             expect(existsSync(join(root, 'judge', 'after'))).toBe(false);
@@ -162,13 +164,13 @@ describe('the judge', () => {
         });
 
         it('reads the verdicts the judge left, and hashes everything it was given, which is the same for the same input', () => {
-            const one = JudgeDirectory.prepare(join(root, 'one'), input);
-            const other = JudgeDirectory.prepare(join(root, 'other'), input);
+            const one = JudgeDirectory.prepare(join(root, 'one'), input, blinding);
+            const other = JudgeDirectory.prepare(join(root, 'other'), input, blinding);
             writeFileSync(join(one.path, 'verdicts.json'), json({ verdicts }));
 
             expect(one.verdicts(RULES).isUsable()).toBe(true);
             expect(other.verdicts(RULES).problems).toEqual([ "there's no verdicts.json" ]);
-            expect(JudgeDirectory.prepare(join(root, 'again'), input).hash()).toBe(other.hash());
+            expect(JudgeDirectory.prepare(join(root, 'again'), input, blinding).hash()).toBe(other.hash());
         });
     });
 
@@ -183,7 +185,7 @@ describe('the judge', () => {
             root = mkdtempSync(join(tmpdir(), 'skill-layouts-judge-'));
             mkdirSync(join(root, 'before'));
             mkdirSync(join(root, 'after'));
-            directory = JudgeDirectory.prepare(join(root, 'judge'), { request: 'r', diff: '', reply: '', before: join(root, 'before'), after: join(root, 'after'), rules: [], exercised: [], reference: new Map() });
+            directory = JudgeDirectory.prepare(join(root, 'judge'), { request: 'r', diff: '', reply: '', before: join(root, 'before'), after: join(root, 'after'), rules: [], exercised: [], reference: new Map() }, blinding);
             output = join(root, 'out');
         });
         afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -201,7 +203,7 @@ describe('the judge', () => {
                 }
                 return { exitCode: 0, durationMs: 21_000, timedOut: false } satisfies Finished;
             };
-            const judge = new Judge({ adapter: adapterOf('kiro'), model, homes: prepareAgentHomes(join(root, 'homes'), join(root, 'npm-cache')), spawn, env, timeoutMs: 120_000, prompt: JudgePrompt.forProject() });
+            const judge = new Judge({ adapter: adapterOf('kiro'), model, homes: prepareAgentHomes(join(root, 'homes'), join(root, 'npm-cache')), spawn, env, timeoutMs: 120_000, prompt: JudgePrompt.forProject(), skills: harnessSkillDirectories() });
             return { judge, calls };
         }
 

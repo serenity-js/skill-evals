@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { CHECKLIST, type Check, type ChecklistItem, exercises, type Verdict } from './conventions.ts';
 import { evalRoot, type Layout } from './layouts.ts';
+import { escaped, type SkillDirectories } from './skill-directories.ts';
 
 const checklistLine = (item: typeof CHECKLIST[number]) =>
     `- [ ] ${ item.id }: ${ item.text }${ item.scoredBy === 'reviewer' ? ' (reviewer only: the AST patterns leave it n/a)' : '' }`;
@@ -56,19 +57,38 @@ export function planRuns(
     return shuffle(keys).map(key => ({ ...key, id: nextId() }));
 }
 
-const SKILL_PATH = /(?:(?:\.kiro|\.claude|\.agents|\.github)\/skills|node_modules\/@serenity-js\/[\w-]+\/skills)\/[\w./-]*/g;
-const SKILL_NAME = /\bserenity-js-[\da-z-]+/g;
+/**
+ * What hides a run's skills from the reviewer, or the judge, since they'd tell them the layout: every path into the
+ * skill directories, and every skill's name.
+ */
+export class Blinding {
 
-/** The diff with the paths and names of skills hidden, since they'd tell the reviewer, or the judge, the layout. */
-export function blinded(text: string): string {
-    return text.replace(SKILL_PATH, '[skill file]').replace(SKILL_NAME, '[skill]');
+    static of(directories: SkillDirectories, skills: readonly string[]): Blinding {
+        return new Blinding(directories, skills);
+    }
+
+    private readonly directories: SkillDirectories;
+    /** A word that starts with a skill's name, such as `serenity-js-screenplay-draft`, or none without skills */
+    private readonly names: string | undefined;
+
+    private constructor(directories: SkillDirectories, skills: readonly string[]) {
+        this.directories = directories;
+        this.names = skills.length > 0 ? `\\b(?:${ skills.map(escaped).join('|') })[\\da-z-]*` : undefined;
+    }
+
+    /** `text`, such as a diff or a reply, with `[skill file]` for each path into a skill directory, and `[skill]` for each word that starts with a skill's name */
+    blind(text: string): string {
+        const withoutPaths = this.directories.withPathsReplaced(text, '[skill file]');
+        return this.names === undefined ? withoutPaths : withoutPaths.replace(new RegExp(this.names, 'g'), '[skill]');
+    }
 }
 
 /**
  * What the reviewer sees of a run: its ID, the request, the diff, and the checklist: the items its request exercises
  * first, then the others, which apply wherever the code the run added is about them.
  */
-export function reviewPacket({ id, request, prompt, diff, reply }: { id: string, request: string, prompt: string, diff: string, reply: string }): string {
+export function reviewPacket({ id, request, prompt, diff, reply }: { id: string, request: string, prompt: string, diff: string, reply: string }, blinding: Blinding): string {
+    const blinded = (text: string) => blinding.blind(text);
     return [
         `# Run ${ id }`,
         '',

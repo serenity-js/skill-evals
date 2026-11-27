@@ -8,6 +8,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Request } from '../requests.ts';
+import type { Blinding } from '../review.ts';
 import { writeJson } from '../results.ts';
 import { Ballot } from './ballot.ts';
 import { Comparison } from './comparison.ts';
@@ -61,6 +62,8 @@ export interface CalibrationDependencies {
     work: string;
     /** The port of the local API server, for a round that didn't record one */
     defaultPort: number;
+    /** What hides the run's skills in the judge's directory */
+    blinding: Blinding;
     /** A new random name, for each judge's directory, so its path doesn't name the run */
     randomName: () => string;
     log: (message: string) => void;
@@ -145,8 +148,8 @@ export class Calibration {
 
     /** A session of the judge on the run: the saved one, when its fingerprint still matches, or a new one */
     private async session(key: SessionKey, judge: Judge, input: JudgeInput): Promise<JudgeSession> {
-        const { files, identity, guide, work, randomName, log } = this.dependencies;
-        const directory = JudgeDirectory.prepare(join(work, 'judge', randomName()), input);
+        const { files, identity, guide, work, randomName, blinding, log } = this.dependencies;
+        const directory = JudgeDirectory.prepare(join(work, 'judge', randomName()), input, blinding);
         const fingerprint = Fingerprint.of(identity, judge.prompt, directory);
         const label = `${ key.round } ${ key.run } #${ key.repeat }`;
         let session = files.sessions.find(key, fingerprint);

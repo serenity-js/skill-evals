@@ -2,8 +2,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { parseCopilotStream, parseKiroStream, skillFileIn, skillFilesIn } from '../src/streams.ts';
+import { harnessSkillDirectories } from '../src/harness-skills.ts';
+import { parseCopilotStream, parseKiroStream, skillFilesIn } from '../src/streams.ts';
 
+const skills = harnessSkillDirectories();
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8');
 
 describe('streams', () => {
@@ -18,7 +20,7 @@ describe('streams', () => {
             [ 'C:\\runs\\x\\.claude\\skills\\serenity-js-writing-tasks\\SKILL.md',    'serenity-js-writing-tasks/SKILL.md' ],
             [ '/runs/x/.github/skills/serenity-js-writing-tasks/SKILL.md',            'serenity-js-writing-tasks/SKILL.md' ],
         ])('finds the skill file in %s', (path, expected) => {
-            expect(skillFileIn(path)).toBe(expected);
+            expect(skills.fileIn(path)).toBe(expected);
         });
 
         it.each([
@@ -26,7 +28,7 @@ describe('streams', () => {
             '/runs/x/.kiro/skills/serenity-js-screenplay',
             '/runs/x/skills/serenity-js-screenplay/SKILL.md',
         ])('finds none in %s', path => {
-            expect(skillFileIn(path)).toBeUndefined();
+            expect(skills.fileIn(path)).toBeUndefined();
         });
     });
 
@@ -41,7 +43,7 @@ describe('streams', () => {
             [ "sed -n '1,80p' node_modules/@serenity-js/core/skills/serenity-js-writing-questions/SKILL.md",     [ 'serenity-js-writing-questions/SKILL.md' ] ],
             [ 'cd /runs/x && cat .kiro/skills/serenity-js-screenplay/tasks.md',                                  [ 'serenity-js-screenplay/tasks.md' ] ],
         ])('finds the skill files that %s reads', (command, expected) => {
-            expect(skillFilesIn(command)).toEqual(expected);
+            expect(skillFilesIn(command, skills)).toEqual(expected);
         });
 
         it.each([
@@ -54,14 +56,14 @@ describe('streams', () => {
             'echo .kiro/skills/serenity-js-screenplay/tasks.md',
             'ls .kiro/skills/serenity-js-screenplay && cat .kiro/skills/*/SKILL.md',
         ])("finds none in %s, which doesn't read the file's contents", command => {
-            expect(skillFilesIn(command)).toEqual([]);
+            expect(skillFilesIn(command, skills)).toEqual([]);
         });
     });
 
     describe('parseKiroStream', () => {
         // the pilot's streams, of layout B with request 4, and of layout None with request 1, trimmed
-        const layoutB = parseKiroStream(fixture('kiro-v3.pilot-8e3a4613.jsonl'));
-        const none = parseKiroStream(fixture('kiro-v3.pilot-6a069239.jsonl'));
+        const layoutB = parseKiroStream(fixture('kiro-v3.pilot-8e3a4613.jsonl'), skills);
+        const none = parseKiroStream(fixture('kiro-v3.pilot-6a069239.jsonl'), skills);
 
         it('records the skills the agent loaded, and the supporting files it read', () => {
             expect(layoutB.skillReads).toEqual([
@@ -111,13 +113,13 @@ describe('streams', () => {
             [ 'a read that never completed', call('t1', { kind: 'read', rawInput: { path: '/r/.kiro/skills/serenity-js-writing-tasks/SKILL.md' } }, 'in_progress') ],
             [ 'a listing of a skill file',   call('t1', { kind: 'execute', rawInput: { command: 'ls .kiro/skills/serenity-js-writing-tasks/SKILL.md' } }, 'completed') ],
         ])("doesn't count %s as a read", (_, updates) => {
-            expect(parseKiroStream(acp(...updates)).skillReads).toEqual([]);
+            expect(parseKiroStream(acp(...updates), skills).skillReads).toEqual([]);
         });
 
         describe('skill loads', () => {
 
             // the smoke run of Kiro 3.3.0 whose skill load's rawInput was { name } rather than { id: 'skill::…' }, trimmed
-            const smoke = parseKiroStream(fixture('kiro-v3.smoke-974a67ed.jsonl'));
+            const smoke = parseKiroStream(fixture('kiro-v3.smoke-974a67ed.jsonl'), skills);
 
             const disclosed = (skill: string) => ({ _meta: { kiro: { toolId: 'disclose_context', disclosedContext: { type: 'skill', displayName: skill, uri: `file:///r/.kiro/skills/${ skill }/SKILL.md` } } } });
             const completedLoad = (id: string, rawInput: Record<string, unknown>, extra: Record<string, unknown> = {}) => [
@@ -133,7 +135,7 @@ describe('streams', () => {
             });
 
             it("counts a load from the call's disclosed context, which names the skill's SKILL.md, whatever its rawInput says", () => {
-                expect(parseKiroStream(acp(...completedLoad('t1', {}, disclosed('serenity-js-writing-tasks')))).skillReads)
+                expect(parseKiroStream(acp(...completedLoad('t1', {}, disclosed('serenity-js-writing-tasks'))), skills).skillReads)
                     .toEqual([ { file: 'serenity-js-writing-tasks/SKILL.md', via: 'skill-tool' } ]);
             });
 
@@ -141,12 +143,12 @@ describe('streams', () => {
                 [ 'an id',  { id: 'skill::serenity-js-writing-tasks' } ],
                 [ 'a name', { name: 'serenity-js-writing-tasks' } ],
             ])('counts a completed load whose rawInput gives the skill as %s, when the call discloses no context', (_, rawInput) => {
-                expect(parseKiroStream(acp(...completedLoad('t1', rawInput))).skillReads)
+                expect(parseKiroStream(acp(...completedLoad('t1', rawInput)), skills).skillReads)
                     .toEqual([ { file: 'serenity-js-writing-tasks/SKILL.md', via: 'skill-tool' } ]);
             });
 
             it('counts a load once, though both its disclosed context and its rawInput name the skill', () => {
-                expect(parseKiroStream(acp(...completedLoad('t1', { name: 'serenity-js-writing-tasks' }, disclosed('serenity-js-writing-tasks')))).skillReads)
+                expect(parseKiroStream(acp(...completedLoad('t1', { name: 'serenity-js-writing-tasks' }, disclosed('serenity-js-writing-tasks'))), skills).skillReads)
                     .toEqual([ { file: 'serenity-js-writing-tasks/SKILL.md', via: 'skill-tool' } ]);
             });
 
@@ -156,11 +158,11 @@ describe('streams', () => {
                     { sessionUpdate: 'session_info_update', _meta: { kiro: { pendingInteraction: { toolCallId: 't1', _meta: disclosed('serenity-js-writing-tasks')._meta } } } },
                 ];
 
-                expect(parseKiroStream(acp(...asked)).skillReads).toEqual([]);
+                expect(parseKiroStream(acp(...asked), skills).skillReads).toEqual([]);
             });
 
             it("doesn't take a name in the rawInput of another tool for a skill", () => {
-                expect(parseKiroStream(acp(...completedLoad('t1', { name: 'serenity-js-writing-tasks', path: 'spec/x.spec.ts' }))).skillReads).toEqual([]);
+                expect(parseKiroStream(acp(...completedLoad('t1', { name: 'serenity-js-writing-tasks', path: 'spec/x.spec.ts' })), skills).skillReads).toEqual([]);
             });
         });
 
@@ -170,7 +172,7 @@ describe('streams', () => {
                 ...call('t2', { kind: 'read', rawInput: { path: '/r/.kiro/skills/serenity-js-writing-questions/SKILL.md' } }, 'completed', 'failed'),
             ];
 
-            expect(parseKiroStream(acp(...updates)).skillReads).toEqual([ { file: 'serenity-js-writing-tasks/SKILL.md', via: 'shell' } ]);
+            expect(parseKiroStream(acp(...updates), skills).skillReads).toEqual([ { file: 'serenity-js-writing-tasks/SKILL.md', via: 'shell' } ]);
         });
 
         it("refuses an AG-UI stream, though it has runStarted and runFinished, rather than scoring it as a run that read nothing", () => {
@@ -180,22 +182,22 @@ describe('streams', () => {
                 { type: 'runFinished', run_id: 'r' },
             ].map(event => JSON.stringify(event)).join('\n');
 
-            expect(() => parseKiroStream(agui)).toThrow(/doesn't look like Kiro's ACP stream/);
+            expect(() => parseKiroStream(agui, skills)).toThrow(/doesn't look like Kiro's ACP stream/);
         });
 
         it('refuses a stream that starts as ACP but has no session updates', () => {
             const empty = [ { type: 'runStarted', data: { payloadSchema: 'acp' } }, { type: 'runFinished', data: {} } ].map(event => JSON.stringify(event)).join('\n');
 
-            expect(() => parseKiroStream(empty)).toThrow(/doesn't look like Kiro's ACP stream/);
+            expect(() => parseKiroStream(empty, skills)).toThrow(/doesn't look like Kiro's ACP stream/);
         });
 
         it("refuses Copilot's stream", () => {
-            expect(() => parseKiroStream(fixture('copilot-cli.synthetic.jsonl'))).toThrow(/doesn't look like Kiro's ACP stream/);
+            expect(() => parseKiroStream(fixture('copilot-cli.synthetic.jsonl'), skills)).toThrow(/doesn't look like Kiro's ACP stream/);
         });
     });
 
     describe('parseCopilotStream', () => {
-        const trace = parseCopilotStream(fixture('copilot-cli.synthetic.jsonl'));
+        const trace = parseCopilotStream(fixture('copilot-cli.synthetic.jsonl'), { skills });
 
         it("records the skills the agent invoked, and the skill files it read and printed, including a subagent's, when the call succeeded", () => {
             expect(trace.skillReads).toEqual([
@@ -227,12 +229,12 @@ describe('streams', () => {
 
         it('records that a model answered, from a usage event or an assistant message', () => {
             expect(trace.modelAnswered).toBe(true);
-            expect(parseCopilotStream(copilotStream('view', { path: 'x' }, { success: true })).modelAnswered).toBe(false);
+            expect(parseCopilotStream(copilotStream('view', { path: 'x' }, { success: true }), { skills }).modelAnswered).toBe(false);
             expect(parseCopilotStream([
                 { type: 'session.start', data: { selectedModel: 'auto' } },
                 { type: 'assistant.message', data: { messageId: 'm1', content: 'Done.' } },
                 { type: 'result', exitCode: 0, usage: { premiumRequests: 1 } },
-            ].map(event => JSON.stringify(event)).join('\n'))).toMatchObject({ modelAnswered: true, models: [] });
+            ].map(event => JSON.stringify(event)).join('\n'), { skills })).toMatchObject({ modelAnswered: true, models: [] });
         });
 
         it('names the models of model.call_start when the stream has no usage events, and prefers them to the usage events when it has both', () => {
@@ -246,12 +248,12 @@ describe('streams', () => {
                 { type: 'result', exitCode: 0, usage: { premiumRequests: 1 } },
             ].map(event => JSON.stringify(event)).join('\n');
 
-            expect(parseCopilotStream(events()).models).toEqual([ 'gpt-6-luna', 'claude-sonnet-5.5' ]);
-            expect(parseCopilotStream(events({ type: 'assistant.usage', data: { model: 'gpt-5.4' } })).models).toEqual([ 'gpt-6-luna', 'claude-sonnet-5.5' ]);
+            expect(parseCopilotStream(events(), { skills }).models).toEqual([ 'gpt-6-luna', 'claude-sonnet-5.5' ]);
+            expect(parseCopilotStream(events({ type: 'assistant.usage', data: { model: 'gpt-5.4' } }), { skills }).models).toEqual([ 'gpt-6-luna', 'claude-sonnet-5.5' ]);
         });
 
         describe('when the stream is a recorded one with tool calls, from Copilot 1.0.114 with a pin of "auto"', () => {
-            const recorded = parseCopilotStream(fixture('copilot-cli.smoke-e3c01675.jsonl'));
+            const recorded = parseCopilotStream(fixture('copilot-cli.smoke-e3c01675.jsonl'), { skills });
 
             it('names the model from model.call_start, since the stream has no assistant.usage events', () => {
                 expect(recorded.models).toEqual([ 'gpt-6-luna' ]);
@@ -296,7 +298,7 @@ describe('streams', () => {
                 const justThatCall = parseCopilotStream([
                     ...events.filter(event => [ 'session.start', 'result' ].includes(event.type)),
                     ...events.filter(event => event.data?.toolCallId === callId),
-                ].map(event => JSON.stringify(event)).join('\n'));
+                ].map(event => JSON.stringify(event)).join('\n'), { skills });
 
                 it('is the call the recorded stream has, with no view_range', () => {
                     expect((first.data!.arguments as Record<string, unknown>).view_range).toBeUndefined();
@@ -322,12 +324,12 @@ describe('streams', () => {
             const smoke = fixture('copilot-cli.smoke-349396b6.jsonl');
 
             it("refuses a stream with a session.error, and reports the error's message, even though it ends with a result record", () => {
-                expect(() => parseCopilotStream(smoke)).toThrow('Model "claude-sonnet-5.5" is not available.');
-                expect(() => parseCopilotStream(smoke)).toThrow(/the Copilot session failed/);
+                expect(() => parseCopilotStream(smoke, { skills })).toThrow('Model "claude-sonnet-5.5" is not available.');
+                expect(() => parseCopilotStream(smoke, { skills })).toThrow(/the Copilot session failed/);
             });
 
             it('refuses it after a timeout too', () => {
-                expect(() => parseCopilotStream(smoke, { timedOut: true })).toThrow(/is not available/);
+                expect(() => parseCopilotStream(smoke, { timedOut: true, skills })).toThrow(/is not available/);
             });
         });
 
@@ -345,40 +347,40 @@ describe('streams', () => {
             [ 'a cat whose result only says how it exited', 'bash', { command: 'cat .agents/skills/serenity-js-writing-tasks/SKILL.md' }, { success: true, result: { content: 'No such file or directory\n<shellId: 0 completed with exit code 1>' } } ],
             [ 'a call without a result', 'view', { path: '.agents/skills/serenity-js-writing-tasks/SKILL.md' }, undefined ],
         ])("doesn't count %s as a read", (_, name, args, complete) => {
-            expect(parseCopilotStream(copilotStream(name, args, complete)).skillReads).toEqual([]);
+            expect(parseCopilotStream(copilotStream(name, args, complete), { skills }).skillReads).toEqual([]);
         });
 
         it('reads the name of the skill from the skill tool, whichever argument holds it', () => {
-            expect(parseCopilotStream(copilotStream('skill', { name: 'serenity-js-writing-tasks' }, { success: true })).skillReads)
+            expect(parseCopilotStream(copilotStream('skill', { name: 'serenity-js-writing-tasks' }, { success: true }), { skills }).skillReads)
                 .toEqual([ { file: 'serenity-js-writing-tasks/SKILL.md', via: 'skill-tool' } ]);
         });
 
         it('refuses a stream without a result, which means the run ended early', () => {
             const truncated = fixture('copilot-cli.synthetic.jsonl').trim().split('\n').slice(0, -1).join('\n');
 
-            expect(() => parseCopilotStream(truncated)).toThrow(/no result/);
+            expect(() => parseCopilotStream(truncated, { skills })).toThrow(/no result/);
         });
 
         it('scores a stream that a timeout cut off, without its result record, as far as it goes', () => {
             const cutOff = fixture('copilot-cli.synthetic.jsonl').trim().split('\n').slice(0, 9).join('\n');
 
-            expect(parseCopilotStream(cutOff, { timedOut: true }).skillReads).toEqual([
+            expect(parseCopilotStream(cutOff, { timedOut: true, skills }).skillReads).toEqual([
                 { file: 'serenity-js-writing-tests/SKILL.md', via: 'skill-tool' },
                 { file: 'serenity-js-screenplay/references/tasks.md', via: 'read' },
             ]);
-            expect(() => parseCopilotStream(cutOff)).toThrow(/no result/);
+            expect(() => parseCopilotStream(cutOff, { skills })).toThrow(/no result/);
         });
 
         it("refuses a stream it doesn't recognise, even after a timeout", () => {
-            expect(() => parseCopilotStream('{"unexpected":true}', { timedOut: true })).toThrow(/doesn't look like Copilot's JSONL/);
+            expect(() => parseCopilotStream('{"unexpected":true}', { timedOut: true, skills })).toThrow(/doesn't look like Copilot's JSONL/);
         });
 
         it("doesn't report a cost, which Copilot's stream has none of", () => {
-            expect(parseCopilotStream(fixture('copilot-cli.synthetic.jsonl')).costUsd).toBeUndefined();
+            expect(parseCopilotStream(fixture('copilot-cli.synthetic.jsonl'), { skills }).costUsd).toBeUndefined();
         });
 
         it("refuses Kiro's stream, rather than scoring it as a run that read nothing", () => {
-            expect(() => parseCopilotStream(fixture('kiro-v3.pilot-8e3a4613.jsonl'))).toThrow(/doesn't look like Copilot's JSONL/);
+            expect(() => parseCopilotStream(fixture('kiro-v3.pilot-8e3a4613.jsonl'), { skills })).toThrow(/doesn't look like Copilot's JSONL/);
         });
     });
 
@@ -395,11 +397,11 @@ describe('streams', () => {
         it("is what Kiro said after its last tool call, joined from the stream's message chunks", () => {
             const stream = kiro(chunk("I'll read the spec. "), call('t1'), chunk('Added the scenario.\n\n'), chunk('Suggestions: replace PostAndCheck.'));
 
-            expect(parseKiroStream(stream).reply).toBe('Added the scenario.\n\nSuggestions: replace PostAndCheck.');
+            expect(parseKiroStream(stream, skills).reply).toBe('Added the scenario.\n\nSuggestions: replace PostAndCheck.');
         });
 
         it("is empty when Kiro said nothing after its last tool call, as when a run timed out", () => {
-            expect(parseKiroStream(kiro(chunk('Reading the spec.'), call('t1'))).reply).toBe('');
+            expect(parseKiroStream(kiro(chunk('Reading the spec.'), call('t1')), skills).reply).toBe('');
         });
 
         it("is Copilot's last assistant message that says something", () => {
@@ -413,7 +415,7 @@ describe('streams', () => {
                 { type: 'result', usage: {} },
             ].map(event => JSON.stringify(event)).join('\n');
 
-            expect(parseCopilotStream(stream).reply).toBe('Added the scenario. Suggestions: replace PostAndCheck.');
+            expect(parseCopilotStream(stream, { skills }).reply).toBe('Added the scenario. Suggestions: replace PostAndCheck.');
         });
 
         it("is empty when Copilot said nothing after its last tool call, as when a run timed out after a progress message", () => {
@@ -426,7 +428,7 @@ describe('streams', () => {
                 { type: 'result', usage: {} },
             ].map(event => JSON.stringify(event)).join('\n');
 
-            expect(parseCopilotStream(stream).reply).toBe('');
+            expect(parseCopilotStream(stream, { skills }).reply).toBe('');
         });
     });
 });

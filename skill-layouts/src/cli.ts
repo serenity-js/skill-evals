@@ -29,6 +29,7 @@ import { compareResults } from './compare.ts';
 import { checkReference, type ReferenceCheck, renderReferenceCheck } from './references.ts';
 import { loadRequests, type Request } from './requests.ts';
 import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, REVIEW_GUIDE, type RunKey, scoresTemplate } from './review.ts';
+import { harnessBlinding, harnessSkillDirectories } from './harness-skills.ts';
 import { Results } from './results.ts';
 import { renderSmoke, SMOKE_REQUEST, smokeChecks, smokeProblem } from './smoke.ts';
 import { type CheckOptions, checksOf, type Config, loadConfig, type Mode, modelsOf, performRun, agentsToRun, preflightProblems, rebuildWorkingCopy, reparseRecord, rescoreNetworkFailures, resultOf, runsFor, scoreRun, startRun, writeReviewPacket } from './runs.ts';
@@ -320,13 +321,13 @@ async function evaluate(args: Arguments): Promise<void> {
             const performed = { ...await performRun(run, request, directory, files.directory, args.work, config, server), agentVersion: versions.get(run.agent) };
             if (args.mode.mode !== 'smoke') {
                 await scoreRun(run, request, directory, files.directory, performed, config, server, sandbox.checks);
-                writeReviewPacket(run, request, store);
+                writeReviewPacket(run, request, store, harnessBlinding());
                 return;
             }
             // the smoke run reports what stopped its scoring, rather than stopping
             try {
                 await scoreRun(run, request, directory, files.directory, performed, config, server, sandbox.checks);
-                writeReviewPacket(run, request, store);
+                writeReviewPacket(run, request, store, harnessBlinding());
             }
             catch (error) {
                 errors.set(run.id, (error as Error).message);
@@ -474,7 +475,7 @@ export function rescoreChecks(results: string, { work, template, agents = AGENTS
     const scores = store.scores();
     for (const { run } of rescored) {
         scores[run.id] = { ...Object.fromEntries(CHECKLIST.map(item => [ item.id, '' ])), ...scores[run.id] };
-        writeReviewPacket(run, requests.get(run.request)!, store);
+        writeReviewPacket(run, requests.get(run.request)!, store, harnessBlinding());
     }
     if (rescored.length > 0) {
         store.saveScores(Object.fromEntries(Object.entries(scores).sort(([ one ], [ other ]) => one.localeCompare(other))));
@@ -646,7 +647,9 @@ export function calibrationOf(args: Pick<Arguments, 'template' | 'out' | 'work'>
             env,
             timeoutMs: config.runTimeoutMinutes * 60_000,
             prompt: JudgePrompt.forProject(),
+            skills: harnessSkillDirectories(),
         }),
+        blinding: harnessBlinding(),
         identity: JudgeIdentity.of(config.judge.agent, config.judge.model, version),
         files: new CalibrationFiles(args.out),
         guide: ReviewGuide.parse(readFileSync(REVIEW_GUIDE, 'utf8'), CHECKLIST),

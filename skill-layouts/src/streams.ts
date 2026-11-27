@@ -13,6 +13,7 @@
 // by hand, in the recorded events' shapes, and keeps what 1.0.114 doesn't send but its documentation does:
 // assistant.usage events, with their tokens. 1.0.114 names the model in model.call_start and
 // session.auto_mode_resolved instead, and reports no tokens.
+import type { SkillDirectories } from './skill-directories.ts';
 
 export type ReadVia = 'read' | 'skill-tool' | 'shell';
 
@@ -75,21 +76,7 @@ interface ToolCall {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Skill files
-
-// the directories agents read installed skills from, and the packages' own skills/ in node_modules
-const SKILL_FILE = /(?:\.kiro|\.claude|\.agents|\.github)\/skills\/([\w.-]+)\/([\w./-]+\.md)|node_modules\/@serenity-js\/[\w-]+\/skills\/([\w.-]+)\/([\w./-]+\.md)/g;
-
-function skillFilesInText(text: string): string[] {
-    return [ ...text.replaceAll('\\', '/').matchAll(SKILL_FILE) ]
-        .map(([ , skill, file, packageSkill, packageFile ]) => `${ skill ?? packageSkill }/${ file ?? packageFile }`);
-}
-
-/** The skill file a path leads to, as `<skill>/<file>`, or `undefined` when it isn't a skill's Markdown file. */
-export function skillFileIn(path: string): string | undefined {
-    const [ file ] = skillFilesInText(path);
-    return file;
-}
+// Skill files: the files in the skill directories a parser is given, which skill-directories.ts recognises
 
 // the commands that print a file's contents; sed only with -n, which prints the lines it selects
 const READERS = new Set([ 'cat', 'head', 'tail', 'less', 'more', 'bat' ]);
@@ -104,8 +91,8 @@ function readsContents(segment: string): boolean {
  * The skill files a shell command reads the contents of, with `cat`, `head`, `tail`, `less`, `more`, `bat` or
  * `sed -n`. Listing or testing a file, with `ls`, `find` or `test -f`, doesn't read it, and neither does a glob.
  */
-export function skillFilesIn(command: string): string[] {
-    return command.split(/&&|\|\||[;|\n]/).filter(readsContents).flatMap(skillFilesInText);
+export function skillFilesIn(command: string, skills: SkillDirectories): string[] {
+    return command.split(/&&|\|\||[;|\n]/).filter(readsContents).flatMap(segment => skills.filesIn(segment));
 }
 
 function pathsOf(input: Record<string, unknown>): string[] {
@@ -116,7 +103,7 @@ function pathsOf(input: Record<string, unknown>): string[] {
     return paths.filter((path): path is string => typeof path === 'string');
 }
 
-function skillReadsOf(call: ToolCall, tools: { read: string[], shell: string[], skill: string[] }): SkillRead[] {
+function skillReadsOf(call: ToolCall, tools: { read: string[], shell: string[], skill: string[] }, skills: SkillDirectories): SkillRead[] {
     if (! call.succeeded) {
         return [];
     }
@@ -125,10 +112,10 @@ function skillReadsOf(call: ToolCall, tools: { read: string[], shell: string[], 
         return typeof name === 'string' ? [ { file: `${ name.replace(/^\//, '') }/SKILL.md`, via: 'skill-tool' } ] : [];
     }
     if (tools.read.includes(call.name)) {
-        return pathsOf(call.input).flatMap(path => skillFileIn(path) ?? []).map(file => ({ file, via: 'read' }));
+        return pathsOf(call.input).flatMap(path => skills.fileIn(path) ?? []).map(file => ({ file, via: 'read' }));
     }
     if (tools.shell.includes(call.name) && typeof call.input.command === 'string') {
-        return skillFilesIn(call.input.command).map(file => ({ file, via: 'shell' }));
+        return skillFilesIn(call.input.command, skills).map(file => ({ file, via: 'shell' }));
     }
     return [];
 }
@@ -153,13 +140,13 @@ type Update = Record<string, unknown>;
 const KIRO_SKILL = /^skill::(.+)$/;
 
 /** The SKILL.md a call loaded, from the context Kiro disclosed for it, e.g. `file:///…/.kiro/skills/<skill>/SKILL.md`. */
-function disclosedSkillOf(update: Update): string | undefined {
+function disclosedSkillOf(update: Update, skills: SkillDirectories): string | undefined {
     const context = ((((update._meta ?? {}) as Update).kiro ?? {}) as Update).disclosedContext as Update | undefined;
     if (context?.type !== 'skill' || typeof context.uri !== 'string') {
         return undefined;
     }
     const path = context.uri.startsWith('file://') ? decodeURIComponent(new URL(context.uri).pathname) : context.uri;
-    return skillFileIn(path);
+    return skills.fileIn(path);
 }
 
 /**
@@ -177,22 +164,23 @@ function namedSkillOf(input: Record<string, unknown>): string | undefined {
  * The skill files a completed call read. A skill load counts once: by the SKILL.md Kiro disclosed for the call, the
  * primary signal, or else by the skill its rawInput names.
  */
-function kiroSkillReads(call: Update, disclosed: string | undefined): SkillRead[] {
+function kiroSkillReads(call: Update, disclosed: string | undefined, skills: SkillDirectories): SkillRead[] {
     const input = (call.rawInput ?? {}) as Record<string, unknown>;
     const skill = disclosed ?? namedSkillOf(input);
     if (skill) {
         return [ { file: skill, via: 'skill-tool' } ];
     }
     if (call.kind === 'read') {
-        return pathsOf(input).flatMap(path => skillFileIn(path) ?? []).map(file => ({ file, via: 'read' as const }));
+        return pathsOf(input).flatMap(path => skills.fileIn(path) ?? []).map(file => ({ file, via: 'read' as const }));
     }
     if (call.kind === 'execute' && typeof input.command === 'string') {
-        return skillFilesIn(input.command).map(file => ({ file, via: 'shell' as const }));
+        return skillFilesIn(input.command, skills).map(file => ({ file, via: 'shell' as const }));
     }
     return [];
 }
 
-export function parseKiroStream(stream: string): Trace {
+/** What Kiro did, from its stream-json, with its reads of the files in `skills` as its skill reads. */
+export function parseKiroStream(stream: string, skills: SkillDirectories): Trace {
     const events = jsonLines(stream);
     const data = (event: Record<string, unknown>) => (event.data ?? {}) as Record<string, unknown>;
     const updates = events.filter(event => event.type === 'sessionUpdate').map(event => (data(event).update ?? {}) as Update);
@@ -222,7 +210,7 @@ export function parseKiroStream(stream: string): Trace {
     // the SKILL.md each call loaded, from whichever of its updates disclosed it; an approval that's only pending doesn't count
     const disclosures = new Map<string, string>();
     for (const update of updates.filter(update => update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update')) {
-        const skill = disclosedSkillOf(update);
+        const skill = disclosedSkillOf(update, skills);
         if (skill) {
             disclosures.set(text(update.toolCallId), skill);
         }
@@ -240,7 +228,7 @@ export function parseKiroStream(stream: string): Trace {
 
     return {
         reply,
-        skillReads: completed.flatMap(call => kiroSkillReads(call, disclosures.get(text(call.toolCallId)))),
+        skillReads: completed.flatMap(call => kiroSkillReads(call, disclosures.get(text(call.toolCallId)), skills)),
         tokens: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
         tokensReported: false,
         credits: usage.at(-1),
@@ -291,10 +279,11 @@ function isCopilotSuccess(complete: Record<string, unknown>, toolName: string): 
 }
 
 /**
- * What Copilot did, from its JSONL. A stream without its final result record ended early, which only a timeout
- * explains: with `timedOut`, it's scored as far as it goes; without, it stops the scoring.
+ * What Copilot did, from its JSONL, with its reads of the files in `skills` as its skill reads. A stream without its
+ * final result record ended early, which only a timeout explains: with `timedOut`, it's scored as far as it goes;
+ * without, it stops the scoring.
  */
-export function parseCopilotStream(stream: string, { timedOut = false }: { timedOut?: boolean } = {}): Trace {
+export function parseCopilotStream(stream: string, { timedOut = false, skills }: { timedOut?: boolean, skills: SkillDirectories }): Trace {
     const events = jsonLines(stream);
     const data = (event: Record<string, unknown>) => (event.data ?? {}) as Record<string, unknown>;
     if (! events.some(event => [ 'session.start', 'tool.execution_start', 'assistant.message' ].includes(text(event.type)))) {
@@ -341,7 +330,7 @@ export function parseCopilotStream(stream: string, { timedOut = false }: { timed
 
     return {
         reply: messages.at(-1) ?? '',
-        skillReads: calls.flatMap(call => skillReadsOf(call, COPILOT_TOOLS)),
+        skillReads: calls.flatMap(call => skillReadsOf(call, COPILOT_TOOLS, skills)),
         tokens: {
             input: usage.reduce((total, call) => total + number(call.inputTokens), 0),
             cacheRead: usage.reduce((total, call) => total + number(call.cacheReadTokens), 0),

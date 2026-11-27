@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { finishEvaluation, reparseResults, rescoreResults, summariseResults } from '../src/cli.ts';
@@ -297,6 +297,16 @@ describe('startRun', () => {
         writeFileSync(join(directory, 'job-results', 'job-1'), '4');
 
         expect(execFileSync('git', [ 'status', '--porcelain' ], { cwd: directory, encoding: 'utf8' })).toBe('');
+    });
+
+    it("leaves the skill directories every agent reads, and .kiro, which npx skills needs, out of the agent's diff, and nothing else of .github", () => {
+        const directory = startRun(run, request, join(root, 'project'), join(root, 'work'), urlsOf(4567));
+        for (const file of [ '.kiro/skills/a/SKILL.md', '.kiro/settings.json', '.agents/skills/a/SKILL.md', '.claude/skills/a/SKILL.md', '.github/skills/a/SKILL.md', '.github/workflows/check.yml' ]) {
+            mkdirSync(dirname(join(directory, file)), { recursive: true });
+            writeFileSync(join(directory, file), '');
+        }
+
+        expect(execFileSync('git', [ 'status', '--porcelain', '--untracked-files=all' ], { cwd: directory, encoding: 'utf8' })).toBe('?? .github/workflows/check.yml\n');
     });
 });
 

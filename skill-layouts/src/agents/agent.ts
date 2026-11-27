@@ -1,5 +1,6 @@
 // What the harness needs to know about an agent to run it, and to read what it did: one adapter per agent, in a module
 // of its own, registered in index.ts.
+import type { SkillDirectories } from '../skill-directories.ts';
 import type { Trace } from '../streams.ts';
 
 /**
@@ -31,13 +32,16 @@ export interface AgentAdapter<Id extends string = string> {
     credentialProblem(env: NodeJS.ProcessEnv): string | undefined;
     /** Anything else of the user's, in their home directory, that would reach the agent's runs */
     otherProblems(userHome: string): string[];
-    /** What the agent did, from its event stream */
-    parseStream(stream: string, run: { timedOut: boolean }): Trace;
+    /** What the agent did, from its event stream, with its reads of the files in `skills` as its skill reads */
+    parseStream(stream: string, run: { timedOut: boolean, skills: SkillDirectories }): Trace;
     /**
-     * How a user links their dependencies' skills for this agent with `npx skills`: the skills CLI's ID for the agent,
-     * the project directory it links them into, and a directory the project needs before the CLI links into it at all
+     * Where the agent finds skills, and how a user links their dependencies' skills for it with `npx skills`:
+     * - reads: the project directories the agent reads skills from
+     * - cliAgent: the skills CLI's ID for the agent
+     * - directory: the project directory the CLI links them into, one of `reads`
+     * - needs: a directory the project needs before the CLI links into it at all
      */
-    readonly skills: { readonly cliAgent: string, readonly directory: string, readonly needs?: string };
+    readonly skills: { readonly reads: readonly string[], readonly cliAgent: string, readonly directory: string, readonly needs?: string };
     /** The smoke run's check of the usage the agent reports: credits, or premium requests */
     usageProblem(record: { credits?: number, premiumRequests?: number }): string | undefined;
 }

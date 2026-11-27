@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ADAPTERS, adapterOf, AGENTS, credentialProblems, homeVariables, otherProblems, prepareAgentHomes, versionOf } from '../src/agents/index.ts';
+import { harnessSkillDirectories } from '../src/harness-skills.ts';
 import { parseCopilotStream, parseKiroStream } from '../src/streams.ts';
 
 describe('the agents', () => {
@@ -95,8 +96,10 @@ describe('the agents', () => {
         const kiroStream = readFileSync(join(import.meta.dirname, 'fixtures', 'kiro-v3.smoke-974a67ed.jsonl'), 'utf8');
         const copilotStream = readFileSync(join(import.meta.dirname, 'fixtures', 'copilot-cli.smoke-e3c01675.jsonl'), 'utf8');
 
-        expect(adapterOf('kiro').parseStream(kiroStream, { timedOut: true })).toEqual(parseKiroStream(kiroStream));
-        expect(adapterOf('copilot').parseStream(copilotStream, { timedOut: true })).toEqual(parseCopilotStream(copilotStream, { timedOut: true }));
+        const skills = harnessSkillDirectories();
+
+        expect(adapterOf('kiro').parseStream(kiroStream, { timedOut: true, skills })).toEqual(parseKiroStream(kiroStream, skills));
+        expect(adapterOf('copilot').parseStream(copilotStream, { timedOut: true, skills })).toEqual(parseCopilotStream(copilotStream, { timedOut: true, skills }));
     });
 
     it("check the usage each reports in the smoke run: Kiro's credits, Copilot's premium requests", () => {
@@ -107,9 +110,19 @@ describe('the agents', () => {
     });
 
     it("say how npx skills links their skills: Kiro's into .kiro/skills, once there's a .kiro, Copilot's into .agents/skills", () => {
-        expect(AGENTS.map(agent => adapterOf(agent).skills)).toEqual([
+        expect(AGENTS.map(agent => { const { cliAgent, directory, needs } = adapterOf(agent).skills; return { cliAgent, directory, ...(needs ? { needs } : {}) }; })).toEqual([
             { cliAgent: 'kiro-cli', directory: '.kiro/skills', needs: '.kiro' },
             { cliAgent: 'github-copilot', directory: '.agents/skills' },
         ]);
+    });
+
+    it('say where their agent reads skills from, which includes where npx skills links them', () => {
+        expect(AGENTS.map(agent => adapterOf(agent).skills.reads)).toEqual([
+            [ '.kiro/skills' ],
+            [ '.github/skills', '.agents/skills', '.claude/skills' ],
+        ]);
+        for (const agent of AGENTS) {
+            expect(adapterOf(agent).skills.reads).toContain(adapterOf(agent).skills.directory);
+        }
     });
 });

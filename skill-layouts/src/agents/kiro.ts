@@ -30,8 +30,9 @@ export const kiro: AgentAdapter<'kiro'> = {
     credentialOf: (env): Record<string, string> => env.KIRO_API_KEY ? { KIRO_API_KEY: env.KIRO_API_KEY } : {},
     credentialProblem: env => env.KIRO_API_KEY ? undefined : 'Kiro needs KIRO_API_KEY: each run has its own KIRO_HOME, without your login',
     otherProblems: () => [],
-    parseStream: stream => parseKiroStream(stream),
-    // npx skills only links into .kiro/skills when the project has a .kiro directory, as a Kiro user's project would
-    skills: { cliAgent: 'kiro-cli', directory: '.kiro/skills', needs: '.kiro' },
+    parseStream: (stream, { skills }) => parseKiroStream(stream, skills),
+    // Kiro reads project skills from .kiro/skills; npx skills only links into it when the project has a .kiro directory,
+    // as a Kiro user's project would
+    skills: { reads: [ '.kiro/skills' ], cliAgent: 'kiro-cli', directory: '.kiro/skills', needs: '.kiro' },
     usageProblem: ({ credits }) => credits === undefined ? 'no credits recorded' : undefined,
 };

@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 import { CHECKLIST, type Check } from '../src/conventions.ts';
 import { evalRoot } from '../src/layouts.ts';
+import { harnessBlinding } from '../src/harness-skills.ts';
 import { combineVerdicts, disagreements, planRuns, reviewPacket, scoresTemplate } from '../src/review.ts';
+
+const blinding = harnessBlinding();
 
 describe('planRuns', () => {
 
@@ -48,7 +51,7 @@ describe('reviewPacket', () => {
         "+const ConvertUnits = (expression: Answerable<string>) => Task.where(the`#actor converts ${ expression }`)",
     ].join('\n');
 
-    const packet = reviewPacket({ id: '3f9c2a1e', request: '9-new-interface', prompt: 'Add a scenario that converts 5 inches to centimetres.', diff, reply: '' });
+    const packet = reviewPacket({ id: '3f9c2a1e', request: '9-new-interface', prompt: 'Add a scenario that converts 5 inches to centimetres.', diff, reply: '' }, blinding);
 
     it('shows the request and the diff under the run ID', () => {
         expect(packet).toContain('# Run 3f9c2a1e');
@@ -72,18 +75,18 @@ describe('reviewPacket', () => {
     });
 
     it("shows the agent's final reply, with the names and paths of skills hidden, where its suggestions are", () => {
-        const withReply = reviewPacket({ id: '3f9c2a1e', request: '11-add-to-messy-code', prompt: 'Add a scenario.', diff, reply: 'Added it, as the serenity-js-screenplay skill says. Suggestions: replace PostAndCheck.' });
+        const withReply = reviewPacket({ id: '3f9c2a1e', request: '11-add-to-messy-code', prompt: 'Add a scenario.', diff, reply: 'Added it, as the serenity-js-screenplay skill says. Suggestions: replace PostAndCheck.' }, blinding);
 
         expect(withReply).toContain("## The agent's reply\n\nAdded it, as the [skill] skill says. Suggestions: replace PostAndCheck.");
     });
 
     it("says when the run left no final reply", () => {
-        expect(reviewPacket({ id: '3f9c2a1e', request: '11-add-to-messy-code', prompt: 'Add a scenario.', diff, reply: '' }))
+        expect(reviewPacket({ id: '3f9c2a1e', request: '11-add-to-messy-code', prompt: 'Add a scenario.', diff, reply: '' }, blinding))
             .toContain("## The agent's reply\n\n(none: the agent said nothing after its last tool call)");
     });
 
     it("lists every item: those the run's request exercises first, then the others, to score where the code the run added is about them", () => {
-        const request2 = reviewPacket({ id: '3f9c2a1e', request: '2-step-that-does-several-things', prompt: 'Add a step.', diff, reply: '' });
+        const request2 = reviewPacket({ id: '3f9c2a1e', request: '2-step-that-does-several-things', prompt: 'Add a step.', diff, reply: '' }, blinding);
 
         expect(request2).toMatch(/### The items the request exercises\n\n[^#]*- \[ \] tasks-for-steps:/);
         expect(request2).toMatch(/### The other items\n\n[^#]*- \[ \] actor-names:/);
