@@ -45,13 +45,12 @@ function modelCell(runs: Scored[], modelsOfRun: (record: RunRecord) => string[] 
     return lines.length > 0 ? lines.join('<br>') : 'n/a';
 }
 
-const AGENT_ORDER = [ 'kiro', 'copilot' ];
 
 /** The run shown for a layout: its first repeat with a result, Kiro's before Copilot's. */
 function shownRunOf(scored: Scored[]): Scored | undefined {
     return [ ...scored ].sort((one, other) =>
         one.run.repeat - other.run.repeat
-        || AGENT_ORDER.indexOf(one.run.agent) - AGENT_ORDER.indexOf(other.run.agent)
+        || AGENTS.indexOf(one.run.agent) - AGENTS.indexOf(other.run.agent)
         || one.run.id.localeCompare(other.run.id))[0];
 }
 

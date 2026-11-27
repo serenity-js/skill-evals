@@ -3,7 +3,7 @@
 // before its first pilot. A check the agent's choices fail, such as a skill it didn't load, says so, apart from one
 // the harness fails, such as a stream the parser read no tool calls from.
 import type { Request } from './requests.ts';
-import type { Agent } from './review.ts';
+import { adapterOf, type Agent, homeVariables } from './agents/index.ts';
 import { ENVIRONMENT_BASICS } from './runs.ts';
 import type { SkillRead } from './streams.ts';
 
@@ -20,11 +20,8 @@ const SKILL = 'serenity-js-writing-tests';
 const FILE = 'serenity-js-screenplay/references/tasks.md';
 const COMMAND = 'cat .mocharc.yml';
 
-const CREDENTIALS: Record<Agent, string[]> = {
-    kiro: [ 'KIRO_API_KEY' ],
-    copilot: [ 'COPILOT_GITHUB_TOKEN' ],
-};
-const HOMES = [ 'KIRO_HOME', 'COPILOT_HOME', 'COPILOT_AUTO_UPDATE', 'npm_config_cache' ];
+// the variables the run's homes set, but HOME, which is one of the basics
+const HOMES = homeVariables();
 // the harness sets them, so the agent reaches the local API server directly
 const NO_PROXY = [ 'NO_PROXY', 'no_proxy' ];
 // the harness sets them in every run, for request 9's calculation jobs
@@ -77,7 +74,7 @@ const NAMES = [ 'the stream', 'the skill load', 'the file read', 'the shell comm
     'the agent and the local server', "the harness's npm test and the local server" ];
 
 function environmentProblem(agent: Agent, names: string[]): string | undefined {
-    const own = CREDENTIALS[agent];
+    const own = adapterOf(agent).credentials;
     const unexpected = names.filter(name => ! own.includes(name) && ! HOMES.includes(name) && ! name.startsWith('LC_')
         && ! ENVIRONMENT_BASICS.includes(name) && ! NO_PROXY.includes(name) && ! JOB_DIRECTORIES.includes(name));
     if (unexpected.length > 0) {
@@ -134,9 +131,7 @@ export function smokeChecks({ agent, pin, error, record, logs, resultSaved, pack
         check(NAMES[2], 'agent', fileReadProblem(record.skillReads)),
         check(NAMES[3], 'agent', record.shellCommands.some(command => command.includes(COMMAND)) ? undefined : `the agent didn't run ${ COMMAND }`),
         check(NAMES[4], 'harness', modelProblem(pin, record)),
-        check(NAMES[5], 'harness', agent === 'kiro'
-            ? (record.credits === undefined ? 'no credits recorded' : undefined)
-            : (record.premiumRequests === undefined ? 'no premium requests recorded' : undefined)),
+        check(NAMES[5], 'harness', adapterOf(agent).usageProblem(record)),
         check(NAMES[6], 'harness', ! record.checksSandboxed ? "tsc and npm test didn't run under sandbox-exec"
             : (! logs.tsc ? 'no tsc.log' : (! logs.test ? 'no test.log' : undefined))),
         check(NAMES[7], 'harness', ! resultSaved ? 'no result.json'

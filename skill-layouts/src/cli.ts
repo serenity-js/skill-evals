@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+import { adapterOf, versionOf } from './agents/index.ts';
 import { ensurePortFree, withApiServer } from './api-server.ts';
 import { run } from './child-processes.ts';
 import { type AgentConditions, checkConditions, fixtureHashes, hashOf, lockfileHashes, recordAgentConditions, recordLockfiles } from './conditions.ts';
@@ -158,16 +159,6 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
 
 const log = (message: string) => console.log(`eval:skill-layouts: ${ message }`);
 
-/** What `command --version` prints, trimmed, or `not installed` when it can't start or fails. */
-export function versionOf(command: string): string {
-    try {
-        return run(command, [ '--version' ], { stdio: [ 'ignore', 'pipe', 'ignore' ] }).trim();
-    }
-    catch {
-        return 'not installed';
-    }
-}
-
 function requestsById(): Map<string, Request> {
     return new Map([ ...requestsOf(), [ SMOKE_REQUEST.id, SMOKE_REQUEST ] ]);
 }
@@ -247,7 +238,7 @@ async function evaluate(args: Arguments): Promise<void> {
     }
     checkTemplateCommit(args.template, config.template.commit);
     const conditionsFile = store.conditionsFile;
-    const versions = new Map(agents.map(agent => [ agent, versionOf(agent === 'kiro' ? 'kiro-cli' : 'copilot') ]));
+    const versions = new Map(agents.map(agent => [ agent, versionOf(adapterOf(agent)) ]));
     const agentConditions = (agent: Agent): AgentConditions => ({ model: config.models[agent], version: versions.get(agent)! });
     if (! args.prepareOnly) {
         const requestOf = requestsById();

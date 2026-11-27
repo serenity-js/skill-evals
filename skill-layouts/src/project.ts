@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
+import { adapterOf, AGENTS } from './agents/index.ts';
 import { run as runToCompletion } from './child-processes.ts';
 import { type Layout, PACKAGES_WITH_SKILLS, skillsDirectoryOf } from './layouts.ts';
 import { Work } from './work.ts';
@@ -16,13 +17,11 @@ export const PACKAGES = [ 'assertions', 'console-reporter', 'core', 'html-report
 export const SKILLS_CLI = 'skills@1.8.1';
 
 /**
- * How a user links the skills of their dependencies for Kiro and Copilot, with `npx skills`, whose agent ID for
- * Copilot is github-copilot, and the directories it links them into: `.kiro/skills` for Kiro, once the project has a
- * `.kiro`, and `.agents/skills` for Copilot, which reads project skills from `.github/skills`, `.agents/skills` and
- * `.claude/skills`.
+ * How a user links the skills of their dependencies for every agent, with `npx skills`, and the directories it links
+ * them into, as each agent's adapter, in agents/, says.
  */
-export const SKILLS_SYNC = [ 'experimental_sync', '-y', '-a', 'kiro-cli', 'github-copilot' ];
-export const AGENT_SKILL_DIRECTORIES = [ '.kiro/skills', '.agents/skills' ];
+export const SKILLS_SYNC = [ 'experimental_sync', '-y', '-a', ...AGENTS.map(agent => adapterOf(agent).skills.cliAgent) ];
+export const AGENT_SKILL_DIRECTORIES = AGENTS.map(agent => adapterOf(agent).skills.directory);
 
 interface Manifest {
     dependencies?: Record<string, string>;
@@ -283,8 +282,10 @@ export function prepareProject(layout: Layout, template: { directory: string, co
     writeFileSync(manifestPath, `${ JSON.stringify(withTarballs(JSON.parse(readFileSync(manifestPath, 'utf8')), tarballs), null, 2) }\n`);
     installDependencies(project, savedLockfile);
 
-    // npx skills only links into .kiro/skills when the project has a .kiro directory, as a Kiro user's project would
-    mkdirSync(join(project, '.kiro'), { recursive: true });
+    // the directories an agent's project needs before npx skills links into it, such as .kiro
+    for (const needed of AGENTS.flatMap(agent => adapterOf(agent).skills.needs ?? [])) {
+        mkdirSync(join(project, needed), { recursive: true });
+    }
     run('npx', [ '-y', SKILLS_CLI, ...SKILLS_SYNC ], project);
 
     const problems = [

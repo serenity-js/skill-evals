@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { type ApiServer, type ApiServerUrls, localServerDown, serverRequestsOf, withApiServer } from './api-server.ts';
 import { complete, type Finished, run, runBuffer, spawnWithTimeout } from './child-processes.ts';
 import { checkConventions, type Check, type ProjectFiles, type SourceFile } from './conventions.ts';
-import { ALLOWED_HOSTS, type AgentHomes, credentialProblems, personalSkillsProblems, prepareAgentHomes } from './homes.ts';
+import { adapterOf, type AgentHomes, credentialProblems, otherProblems, prepareAgentHomes } from './agents/index.ts';
 import { evalRoot, type Layout, LAYOUTS } from './layouts.ts';
 import { scoreLoading, type LoadingScore } from './loading.ts';
 import { agentFailureOf, type CommandResult, type Outcome, outcomeOf, probesFor, rescore, testWithRetries, unreachable } from './outcome.ts';
@@ -15,7 +15,7 @@ import { Results, type RunFiles, runFiles, writeJson } from './results.ts';
 import { promptFor, type Request, type Requests } from './requests.ts';
 import { type Agent, AGENTS, type PlannedRun, reviewPacket, type RunKey } from './review.ts';
 import { checksSandboxFor, SANDBOX_EXEC, sandboxPathsOf } from './sandbox.ts';
-import { type AutoMode, parseCopilotStream, parseKiroStream, type SkillRead, type Tokens } from './streams.ts';
+import type { AutoMode, SkillRead, Tokens } from './streams.ts';
 import { Work } from './work.ts';
 
 export type Mode =
@@ -70,22 +70,9 @@ export function runsFor(mode: Mode, requests: Requests): RunKey[] {
     }
 }
 
-/**
- * The command that runs an agent on a request, as close to each other as the two agents allow: every tool allowed,
- * shell commands in the agent's OS sandbox, and the scenarios' APIs reachable from it. Kiro's sandbox settings are in
- * its KIRO_HOME, and Copilot's in its COPILOT_HOME; see homes.ts. Copilot's built-in MCP servers are off, since
- * Kiro's runs have none.
- */
+/** The command that runs an agent on a request, as its adapter, in agents/, says. */
 export function agentCommand(agent: Agent, model: string, prompt: string): { command: string, args: string[] } {
-    return agent === 'kiro'
-        ? { command: 'kiro-cli', args: [ 'chat', '--v3', '--no-interactive', '--sandbox', '--trust-all-tools', '--output-format', 'stream-json', '--model', model, prompt ] }
-        : {
-            command: 'copilot',
-            args: [
-                '-p', prompt, '--output-format', 'json', '--model', model, '--no-ask-user',
-                '--allow-all-tools', `--allow-url=${ ALLOWED_HOSTS.join(',') }`, '--sandbox', '--disable-builtin-mcps',
-            ],
-        };
+    return adapterOf(agent).command(model, prompt);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -211,9 +198,7 @@ const NO_PROXY = { NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localho
  * environment holds, such as cloud credentials.
  */
 export function agentEnvironment(agent: Agent, homes: AgentHomes, env: NodeJS.ProcessEnv, directory: string): Record<string, string> {
-    const credential: Record<string, string> = agent === 'kiro'
-        ? (env.KIRO_API_KEY ? { KIRO_API_KEY: env.KIRO_API_KEY } : {})
-        : (env.COPILOT_GITHUB_TOKEN ? { COPILOT_GITHUB_TOKEN: env.COPILOT_GITHUB_TOKEN } : {});
+    const credential = adapterOf(agent).credentialOf(env);
     return { ...basicsOf(env), ...homes, ...NO_PROXY, ...jobDirectoriesOf(directory), ...credential };
 }
 
@@ -229,7 +214,7 @@ export function preflightProblems(
     return [
         ...(unpinned.length > 0 ? [ `pin the model of ${ unpinned.join(' and ') } in skill-layouts/config.json before the runs` ] : []),
         ...credentialProblems(agents, env),
-        ...personalSkillsProblems(agents, home),
+        ...otherProblems(agents, home),
         ...sandbox(),
     ];
 }
@@ -504,7 +489,7 @@ export async function scoreRun(run: PlannedRun, request: Request, directory: str
 
     // the stream first: a format the parser doesn't recognise, or another model, stops the evaluation before anything else
     const stream = readFileSync(files.stream, 'utf8');
-    const trace = run.agent === 'kiro' ? parseKiroStream(stream) : parseCopilotStream(stream, { timedOut: performed.timedOut });
+    const trace = adapterOf(run.agent).parseStream(stream, { timedOut: performed.timedOut });
     const model = modelProblem(config.models[run.agent], trace.models);
     if (model.stop) {
         throw new Error(`run ${ run.id }: ${ model.stop }`);
@@ -557,7 +542,7 @@ export async function scoreRun(run: PlannedRun, request: Request, directory: str
  * reports a model other than the pin, which would have stopped the run.
  */
 export function reparseRecord(run: PlannedRun, request: Request, record: RunRecord, stream: string, config: Config): { record: RunRecord, problem: string | undefined } {
-    const trace = run.agent === 'kiro' ? parseKiroStream(stream) : parseCopilotStream(stream, { timedOut: record.timedOut });
+    const trace = adapterOf(run.agent).parseStream(stream, { timedOut: record.timedOut });
     const model = modelProblem(config.models[run.agent], trace.models);
     const { model: _legacy, ...current } = record;
     return {

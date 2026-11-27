@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { parseArguments, versionOf } from '../src/cli.ts';
+import { versionOf } from '../src/agents/index.ts';
+import { parseArguments } from '../src/cli.ts';
 import { LAYOUTS } from '../src/layouts.ts';
 import { RUNS_PER_LAYOUT_FOR_A_DECISION } from '../src/summary.ts';
 import { spawnWithTimeout } from '../src/child-processes.ts';
@@ -376,20 +377,20 @@ describe('versionOf', () => {
     it("records what the agent's --version prints, trimmed, and nothing it prints on standard error", () => {
         writeFileSync(join(bin, 'agent'), '#!/bin/sh\n[ "$1" = --version ] && echo "  kiro-cli 3.5.0" && echo "a warning" >&2\n', { mode: 0o755 });
 
-        expect(versionOf(join(bin, 'agent'))).toBe('kiro-cli 3.5.0');
+        expect(versionOf({ executable: join(bin, 'agent') })).toBe('kiro-cli 3.5.0');
     });
 
     it("keeps every line of a version that's more than one, as Copilot's is", () => {
         writeFileSync(join(bin, 'agent'), "#!/bin/sh\nprintf 'GitHub Copilot CLI 1.0.114.\\nRun copilot update to check for updates.\\n'\n", { mode: 0o755 });
 
-        expect(versionOf(join(bin, 'agent'))).toBe('GitHub Copilot CLI 1.0.114.\nRun copilot update to check for updates.');
+        expect(versionOf({ executable: join(bin, 'agent') })).toBe('GitHub Copilot CLI 1.0.114.\nRun copilot update to check for updates.');
     });
 
     it("says 'not installed' when the agent can't start, or --version fails", () => {
         writeFileSync(join(bin, 'failing'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 
-        expect(versionOf(join(bin, 'no-such-agent'))).toBe('not installed');
-        expect(versionOf(join(bin, 'failing'))).toBe('not installed');
+        expect(versionOf({ executable: join(bin, 'no-such-agent') })).toBe('not installed');
+        expect(versionOf({ executable: join(bin, 'failing') })).toBe('not installed');
     });
 });
 

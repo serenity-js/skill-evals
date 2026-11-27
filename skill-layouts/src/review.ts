@@ -13,8 +13,9 @@ const checklistLine = (item: typeof CHECKLIST[number]) =>
 /** The rules the decisions made so far give the reviewer, each with the run it was made on */
 export const REVIEW_GUIDE = join(evalRoot, 'review-guide.md');
 
-export const AGENTS = [ 'kiro', 'copilot' ] as const;
-export type Agent = typeof AGENTS[number];
+import { type Agent } from './agents/index.ts';
+
+export { AGENTS, type Agent } from './agents/index.ts';
 
 export interface RunKey {
     agent: Agent;
