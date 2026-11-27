@@ -174,6 +174,22 @@ describe('addedLinesOf', () => {
 
         expect(addedLinesOf(diff)).toEqual(new Map([ [ 'spec/a.spec.ts', new Set([ 4, 5 ]) ] ]));
     });
+
+    it("reads the paths git quotes, such as one with a non-ASCII character or a quote, and those with a space, as they're named", () => {
+        const diff = [
+            '+++ "b/src/caf\\303\\251.ts"',
+            '@@ -0,0 +1 @@',
+            '+one',
+            '+++ "b/src/a \\"quoted\\" name.ts"\t',
+            '@@ -0,0 +1 @@',
+            '+two',
+            '+++ b/src/a 🙂 name.ts\t',
+            '@@ -0,0 +1 @@',
+            '+three',
+        ].join('\n');
+
+        expect(addedLinesOf(diff)).toEqual(new Map([ [ 'src/café.ts', new Set([ 1 ]) ], [ 'src/a "quoted" name.ts', new Set([ 1 ]) ], [ 'src/a 🙂 name.ts', new Set([ 1 ]) ] ]));
+    });
 });
 
 describe('installDependencies', () => {

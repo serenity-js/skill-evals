@@ -174,6 +174,16 @@ describe('rules', () => {
             expect(change.before.map(file => file.path)).toEqual([ 'src/names.ts', 'src/removed.ts' ]);
         });
 
+        it('names its files as they are, whatever characters they have', () => {
+            write('fail/x/before/src/café.ts', 'const a = 1;\n');
+            write('fail/x/after/src/café.ts', 'const a = 1;\nconst b = 2;\n');
+            write('fail/x/after/src/a "quoted" name.ts', 'const c = 3;\n');
+
+            const change = Example.at(join(root, 'fail/x'), 'fail/x', Verdict.fail).changeWith(diff);
+
+            expect(change.files.map(file => [ file.path, [ ...file.addedLines ] ])).toEqual([ [ 'src/a "quoted" name.ts', [ 1 ] ], [ 'src/café.ts', [ 2 ] ] ]);
+        });
+
         it('is all added lines when it has no before/', () => {
             write('pass/x/after/src/names.ts', 'const a = 1;');
 

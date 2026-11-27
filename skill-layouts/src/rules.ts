@@ -156,7 +156,7 @@ export type DirectoryDiff = (directory: string) => string;
 export function gitDirectoryDiff(run: typeof runCommand): DirectoryDiff {
     return directory => {
         try {
-            return run('git', [ 'diff', '--no-index', '--no-renames', '--no-ext-diff', '--no-color', '--unified=0', '--src-prefix=a/', '--dst-prefix=b/', '--', 'before', 'after' ], { cwd: directory });
+            return run('git', [ '-c', 'core.quotePath=false', 'diff', '--no-index', '--no-renames', '--no-ext-diff', '--no-color', '--unified=0', '--src-prefix=a/', '--dst-prefix=b/', '--', 'before', 'after' ], { cwd: directory });
         }
         catch (error) {
             const { status, stdout } = error as { status?: number, stdout?: string };
