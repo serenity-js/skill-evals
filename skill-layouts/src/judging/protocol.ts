@@ -1,11 +1,15 @@
 import type { Share } from './share.ts';
 
-export type CalibrationStatus = 'calibrated' | 'calibrated against false alarms only' | 'not calibrated' | 'too few held-out verdicts';
+export type CalibrationStatus = 'calibrated' | 'calibrated against false alarms only' | 'calibrated against misses only' | 'not calibrated' | 'too few held-out verdicts';
 
-/** What the protocol decides an item from: the judge's agreement with the held-out verdicts, and the held-out fails it caught. */
+/**
+ * What the protocol decides an item from: the judge's agreement with the held-out verdicts, the held-out fails it
+ * caught, and the held-out passes it kept.
+ */
 export interface ItemEvidence {
     heldOut: Share;
     heldOutFailsCaught: Share;
+    heldOutPassesKept: Share;
 }
 
 /** A share the judge has to reach, as a fraction, and in words, as the reports say it, such as `two thirds`. */
@@ -37,15 +41,18 @@ export class CalibrationProtocol {
     /** With at least `minFails` of the reviewer's held-out fails, the judge has to fail at least `caught` of those runs too */
     readonly minFails: number;
     readonly caught: Threshold;
+    /** With fewer than `minPasses` of the reviewer's held-out passes, the agreement can't show that the judge tells a pass */
+    readonly minPasses: number;
 
     private readonly criteria: readonly Criterion[];
 
-    constructor({ sessionsPerRun = 3, agreement = 0.85, minHeldOut = 10, minFails = 3, caught = { fraction: 2 / 3, words: 'two thirds' } }: Partial<Pick<CalibrationProtocol, 'sessionsPerRun' | 'agreement' | 'minHeldOut' | 'minFails' | 'caught'>> = {}) {
+    constructor({ sessionsPerRun = 3, agreement = 0.85, minHeldOut = 10, minFails = 3, caught = { fraction: 2 / 3, words: 'two thirds' }, minPasses = 3 }: Partial<Pick<CalibrationProtocol, 'sessionsPerRun' | 'agreement' | 'minHeldOut' | 'minFails' | 'caught' | 'minPasses'>> = {}) {
         this.sessionsPerRun = sessionsPerRun;
         this.agreement = agreement;
         this.minHeldOut = minHeldOut;
         this.minFails = minFails;
         this.caught = caught;
+        this.minPasses = minPasses;
         this.criteria = [
             {
                 status: 'too few held-out verdicts',
@@ -66,6 +73,11 @@ export class CalibrationProtocol {
                 status: 'not calibrated',
                 isMet: ({ heldOutFailsCaught }) => ! heldOutFailsCaught.isAtLeast(caught.fraction),
                 why: ({ heldOutFailsCaught }) => `fails ${ heldOutFailsCaught } of the held-out runs the reviewer failed, under ${ caught.words }`,
+            },
+            {
+                status: 'calibrated against misses only',
+                isMet: ({ heldOutPassesKept }) => heldOutPassesKept.of < minPasses,
+                why: ({ heldOutPassesKept }) => `the reviewer passed it in ${ plural(heldOutPassesKept.of, 'held-out verdict') }, fewer than ${ minPasses }, so the agreement can't show that the judge tells a pass`,
             },
             {
                 status: 'calibrated',

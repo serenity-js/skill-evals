@@ -46,17 +46,53 @@ export class JudgePrompt {
             '- fail: the added code does what the rule forbids, anywhere',
             '- n/a: the added code has nothing the rule applies to',
             '',
+            'A rule that forbids something, or asks for something under a condition, applies to every change that adds code the rule is about, and passes when the change doesn\'t break it.',
+            'So a change that adds code, and logs nothing, passes no-console-log. n/a is only for a change that adds nothing the rule is about.',
+            'Where a rule\'s README has a "When it applies" paragraph that says otherwise, the rule\'s paragraph wins.',
+            '',
             '`reference/` is one good answer to the same request. Use it to see what the rules look like when they\'re followed.',
             "Don't score how close the change is to it: a different answer that follows the rules passes.",
             '',
             `Don't change any file except \`${ verdicts }\`. Don't run the project's tests.`,
-            `Write \`${ verdicts }\` as { "verdicts": [ { "rule", "verdict", "evidence", "reason" } ] }, with one entry for every rule:`,
+            `Write \`${ verdicts }\`, with one entry for every rule, in this shape:`,
+            '',
+            '```json',
+            ...JSON.stringify(JudgePrompt.example, undefined, 2).split('\n'),
+            '```',
             '',
             '- verdict: "pass", "fail" or "n/a"',
-            '- evidence: the lines your verdict rests on, each as `after/<path>:<line>: <code>`, or `reply.md` for a rule about what the agent said. Leave it empty only for n/a',
+            '- evidence: the lines your verdict rests on, each as `after/<path>:<line>: <code>`, or `reply.md` for a rule about what the agent said.',
+            '  `evidence` is always a list, even of one line. A pass needs evidence as much as a fail does. Leave the list empty only for n/a',
             '- reason: one or two sentences',
         ];
     }
+
+    /** verdicts.json's shape, as the prompt shows it: made up, so that it says nothing about any change the judge scores */
+    private static readonly example = {
+        verdicts: [
+            {
+                rule: 'awaiting',
+                verdict: 'pass',
+                evidence: [
+                    'after/spec/basket.spec.ts:12: await actorCalled(\'Bea\').attemptsTo(',
+                    'after/spec/basket.spec.ts:21: await actorCalled(\'Bea\').attemptsTo(',
+                ],
+                reason: 'Both new scenarios await their attemptsTo.',
+            },
+            {
+                rule: 'no-console-log',
+                verdict: 'fail',
+                evidence: [ 'after/src/Basket.ts:30: console.log(items);' ],
+                reason: 'The change logs the basket\'s items.',
+            },
+            {
+                rule: 'repeating',
+                verdict: 'n/a',
+                evidence: [],
+                reason: 'The change repeats no activity for each item of a list.',
+            },
+        ],
+    };
 
     readonly text: string;
 

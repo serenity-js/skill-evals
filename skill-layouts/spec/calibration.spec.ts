@@ -98,6 +98,27 @@ describe('calibrating the judge', () => {
             expect(guide.cites('924363f0', 'grouping')).toBe(false);
         });
 
+        it("says, in the harness's own guide, when each rule decided on pass against n/a applies, and cites no run for timeout, so that its verdicts are held out", () => {
+            const guide = ReviewGuide.parse(readFileSync(REVIEW_GUIDE, 'utf8'), CHECKLIST);
+            const readmeOf = (id: string) => guide.rules.find(rule => rule.id === id)!.readme;
+
+            for (const id of [ 'no-console-log', 'no-debugging-left', 'integrations-first', 'grouping', 'suggested-the-rest' ]) {
+                expect(readmeOf(id), id).toContain('**When it applies.**');
+            }
+            expect(guide.sections.filter(section => section.names('timeout')).flatMap(section => section.cited)).toEqual([]);
+            expect(readmeOf('grouping')).not.toMatch(/standalone questions are fine/i);
+        });
+
+        it('scores each mistake under one rule only, in the harness\'s own guide', () => {
+            const guide = ReviewGuide.parse(readFileSync(REVIEW_GUIDE, 'utf8'), CHECKLIST);
+            const readmeOf = (id: string) => guide.rules.find(rule => rule.id === id)!.readme;
+
+            expect(readmeOf('no-console-log')).not.toMatch(/test runs produced|Log\.the|StreamReporter/);
+            expect(readmeOf('no-console-log')).toContain('calls console.log or another console method');
+            expect(readmeOf('no-debugging-left')).toContain("console calls are no-console-log's to score");
+            expect(readmeOf('structure')).toContain("A change that applies a new way consistently across the project still passes `structure`; whether\nit was asked to is `suggested-the-rest`'s to score.");
+        });
+
         it('gives the judge a rule for every item of the checklist, with its text and the sections that name it', () => {
             const { rules } = ReviewGuide.parse(GUIDE, CHECKLIST);
 
@@ -377,6 +398,7 @@ describe('calibrating the judge', () => {
                 heldOut: { count: 1, of: 3 },
                 failsCaught: { count: 1, of: 2 },
                 heldOutFailsCaught: { count: 0, of: 1 },
+                heldOutPassesKept: { count: 1, of: 2 },
                 confusion: { reviewerPassJudgeFail: 0, reviewerFailJudgePass: 1, otherNa: 0, split: 1, incomplete: 0, missing: 1 },
                 unanimous: { count: 2, of: 4 },
                 status: 'too few held-out verdicts',
@@ -384,11 +406,13 @@ describe('calibrating the judge', () => {
         });
 
         it.each([
-            [ 'too few held-out verdicts', { heldOut: Share.of(9, 9), heldOutFailsCaught: Share.of(5, 5) }, '9 held-out verdicts, of the 10 it needs' ],
-            [ 'not calibrated', { heldOut: Share.of(16, 20), heldOutFailsCaught: Share.of(5, 5) }, 'agrees with 16 of 20 (80%) held-out verdicts, under 85%' ],
-            [ 'calibrated against false alarms only', { heldOut: Share.of(20, 20), heldOutFailsCaught: Share.of(2, 2) }, 'the reviewer failed it in 2 held-out verdicts, fewer than 3' ],
-            [ 'not calibrated', { heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(3, 5) }, 'fails 3 of 5 (60%) of the held-out runs the reviewer failed, under two thirds' ],
-            [ 'calibrated', { heldOut: Share.of(17, 20), heldOutFailsCaught: Share.of(2, 3) }, 'agrees with 17 of 20 (85%) held-out verdicts, and fails 2 of 3 (67%) of the held-out runs the reviewer failed' ],
+            [ 'too few held-out verdicts', { heldOut: Share.of(9, 9), heldOutFailsCaught: Share.of(5, 5), heldOutPassesKept: Share.of(4, 4) }, '9 held-out verdicts, of the 10 it needs' ],
+            [ 'not calibrated', { heldOut: Share.of(16, 20), heldOutFailsCaught: Share.of(5, 5), heldOutPassesKept: Share.of(10, 15) }, 'agrees with 16 of 20 (80%) held-out verdicts, under 85%' ],
+            [ 'calibrated against false alarms only', { heldOut: Share.of(20, 20), heldOutFailsCaught: Share.of(2, 2), heldOutPassesKept: Share.of(18, 18) }, 'the reviewer failed it in 2 held-out verdicts, fewer than 3' ],
+            [ 'not calibrated', { heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(3, 5), heldOutPassesKept: Share.of(15, 15) }, 'fails 3 of 5 (60%) of the held-out runs the reviewer failed, under two thirds' ],
+            [ 'not calibrated', { heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(3, 5), heldOutPassesKept: Share.of(2, 2) }, 'fails 3 of 5 (60%) of the held-out runs the reviewer failed, under two thirds' ],
+            [ 'calibrated against misses only', { heldOut: Share.of(20, 20), heldOutFailsCaught: Share.of(18, 18), heldOutPassesKept: Share.of(2, 2) }, "the reviewer passed it in 2 held-out verdicts, fewer than 3, so the agreement can't show that the judge tells a pass" ],
+            [ 'calibrated', { heldOut: Share.of(17, 20), heldOutFailsCaught: Share.of(2, 3), heldOutPassesKept: Share.of(15, 17) }, 'agrees with 17 of 20 (85%) held-out verdicts, and fails 2 of 3 (67%) of the held-out runs the reviewer failed' ],
         ])('decides an item is %s, as the protocol says', (status, evidence, why) => {
             const decision = protocol.decide(evidence);
 
@@ -397,13 +421,16 @@ describe('calibrating the judge', () => {
         });
 
         it('takes other thresholds, and says them in its decisions and in the report', () => {
-            const strict = new CalibrationProtocol({ sessionsPerRun: 5, agreement: 0.9, minHeldOut: 20, minFails: 4, caught: { fraction: 3 / 4, words: 'three quarters' } });
+            const strict = new CalibrationProtocol({ sessionsPerRun: 5, agreement: 0.9, minHeldOut: 20, minFails: 4, minPasses: 5, caught: { fraction: 3 / 4, words: 'three quarters' } });
+            const passes = Share.of(5, 5);
 
-            expect(strict.decide({ heldOut: Share.of(18, 19), heldOutFailsCaught: Share.of(4, 4) }).why).toBe('19 held-out verdicts, of the 20 it needs');
-            expect(strict.decide({ heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(4, 4) }).status).toBe('calibrated');
-            expect(strict.decide({ heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(2, 4) }).why).toBe('fails 2 of 4 (50%) of the held-out runs the reviewer failed, under three quarters');
+            expect(strict.decide({ heldOut: Share.of(18, 19), heldOutFailsCaught: Share.of(4, 4), heldOutPassesKept: passes }).why).toBe('19 held-out verdicts, of the 20 it needs');
+            expect(strict.decide({ heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(4, 4), heldOutPassesKept: passes }).status).toBe('calibrated');
+            expect(strict.decide({ heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(4, 4), heldOutPassesKept: Share.of(4, 4) }).why).toContain('the reviewer passed it in 4 held-out verdicts, fewer than 5');
+            expect(strict.decide({ heldOut: Share.of(18, 20), heldOutFailsCaught: Share.of(2, 4), heldOutPassesKept: passes }).why).toBe('fails 2 of 4 (50%) of the held-out runs the reviewer failed, under three quarters');
             expect(renderCalibration(reportOf([]), strict)).toContain('Each run is judged by 5 sessions');
-            expect(renderCalibration(reportOf([]), strict)).toContain('at least 90% of at least 20 held-out verdicts, and, where the reviewer failed it in at least 4 held-out verdicts, fails at least three quarters of those runs too.');
+            expect(renderCalibration(reportOf([]), strict)).toContain('An item is calibrated when the judge agrees with at least 90% of at least 20 held-out verdicts, among which the reviewer failed it at least 4 times and passed it at least 5 times, and the judge fails at least three quarters of the runs the reviewer failed.');
+            expect(renderCalibration(reportOf([]), strict)).toContain('With fewer than 4 held-out fails, an item is calibrated against false alarms only; with fewer than 5 held-out passes, against misses only.');
         });
 
         it("decides from the held-out fails only, so failures the guide cites can't calibrate an item, and keeps every run's count in the report", () => {
@@ -420,7 +447,7 @@ describe('calibrating the judge', () => {
                 heldOutFailsCaught: Share.of(0, 1),
                 status: 'calibrated against false alarms only',
             });
-            expect(renderCalibration(report, protocol)).toContain('| 2 of 3 (67%) | 0 of 1 (0%) |');
+            expect(renderCalibration(report, protocol)).toContain('| 2 of 3 (67%) | 0 of 1 (0%) | 10 of 10 (100%) |');
         });
 
         it('reports each round, and every disagreement with the sessions\' reasons', () => {
@@ -437,7 +464,8 @@ describe('calibrating the judge', () => {
             expect(report.disagreements).toEqual([ { round: 'focus', run: 'aaaaaaaa', item: 'structure', reviewer: 'fail', judge: 'pass', heldOut: true, reasons: [ "pass: it's pass", "pass: it's pass", "fail: it's fail" ] } ]);
 
             const markdown = renderCalibration(report, protocol);
-            expect(markdown).toContain('| structure | 1 / 1 / 0 | 1 of 2 (50%) | 0 of 1 (0%) | 0 of 1 (0%) | 0 of 1 (0%) | 1 of 2 (50%) | too few held-out verdicts: 1 held-out verdict, of the 10 it needs |');
+            expect(markdown).toContain('| Item | Reviewer: pass / fail / n/a | Agreement | Held out | Reviewer\'s fails caught | Held-out fails caught | Held-out passes kept | Sessions unanimous | Status |');
+            expect(markdown).toContain('| structure | 1 / 1 / 0 | 1 of 2 (50%) | 0 of 1 (0%) | 0 of 1 (0%) | 0 of 1 (0%) | 0 of 0 (n/a) | 1 of 2 (50%) | too few held-out verdicts: 1 held-out verdict, of the 10 it needs |');
             expect(markdown).toContain('| regression | 1 of 1 (100%) | 0 of 0 (n/a) |');
             expect(markdown).toContain('### structure\n\n- **focus aaaaaaaa**: the reviewer says fail, the judge pass\n  - pass: it\'s pass\n');
             expect(markdown).toContain('6 sessions, 2 of them retried, 1 left no verdicts the harness could use. They used 4.5 credits, and took 6 minutes.');

@@ -343,7 +343,8 @@ and the project:
 
 The judge's directory has a random name, and the guide's run IDs are renamed `run R1`, `run R2` and so on, so the
 judge can't tell which run it's judging. It's told to write `verdicts.json`: a verdict, evidence and a reason for every
-item. When that can't be used, a second session is told what was wrong with it. A stream that reports a model other
+item. The prompt shows the file's exact shape, as a JSON example. Evidence given as one line, rather than a list, is
+read as a list of that line. When the file still can't be used, a second session is told what was wrong with it. A stream that reports a model other
 than the pin stops the calibration, as it stops an evaluation.
 
 A run whose diff applies to no version of its fixture is judged from the request, the diff and the reply alone, as the
@@ -373,14 +374,20 @@ It was decided before the judge scored anything:
 - **An item the reviewer failed in fewer than 3 held-out verdicts** is "calibrated against false alarms only": a
   judge that always says pass would agree with every verdict. Its verdicts don't count until the judge also gets the item's examples
   right, once the items have pass and fail examples of their own
-- **An item with fewer than 10 held-out verdicts** isn't calibrated: `timeout` has 7, and the reviewer scored none of
-  the pattern items but `answerable-parameters`
+- **An item the reviewer passed in fewer than 3 held-out verdicts** is, the other way round, "calibrated against
+  misses only": a judge that always says fail would agree with every verdict. The reviewer passed `timeout` in one
+  held-out verdict, of the regression round, and failed it in 15. Its verdicts don't count until the judge
+  also gets the item's pass examples right
+- **An item with fewer than 10 held-out verdicts** isn't calibrated: the reviewer scored none of the pattern items but
+  `answerable-parameters`
+- **The guide's section on `timeout` cites no run**, and its examples are made up, so that every verdict on it is held
+  out
 
 The report goes in `<out>/calibration/calibration.md`, with everything it's made from in `calibration.json`:
 
 - per item: the reviewer's verdicts, the agreement on every verdict and on the held-out ones, the reviewer's fails the
-  judge caught, in every run and in the held-out ones, how often the sessions were unanimous, and the decision, with
-  its reason
+  judge caught, in every run and in the held-out ones, the reviewer's held-out passes the judge kept, how often the
+  sessions were unanimous, and the decision, with its reason
 - per round, the agreement
 - where the judge differs: the reviewer's pass and the judge's fail, the other way round, n/a on either side, splits,
   and sessions without verdicts
@@ -393,7 +400,7 @@ A stopped calibration resumes from them. Every session gets a fresh `KIRO_HOME`.
 
 ### What it costs
 
-The three recorded rounds have 56 reviewed runs, with 470 verdicts, of which 412 are held out, so a calibration is 168
+The three recorded rounds have 56 reviewed runs, with 470 verdicts, of which 425 are held out, so a calibration is 168
 sessions, plus any retries. Each session reads up to 26 rules and a diff and writes one file. The agents' runs of the
 focus round took 0.7 to 1.3 credits and 30 to 50 seconds each. A judge's session does less, so expect roughly 0.5 to
 1.5 credits each, 85 to 250 credits in all, and a few hours, since the sessions run one at a time.

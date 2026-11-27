@@ -54,7 +54,9 @@ that hold their data and the behaviour that uses it. `skill-layouts/src/judging/
   protocol's criteria are an ordered list, each with its own status and message, so adding one adds an entry.
   `Comparison.differences` and the results a `Ballot` comes to work the same way
 - **Files the harness reads are validated field by field**, with `records.ts`'s combinators, so that a malformed field
-  is reported by its path in the file, whichever file it's in
+  is reported by its path in the file, whichever file it's in. They're read as strictly as their schema says, with one
+  exception, for the judge's output only: `verdicts.json`'s evidence given as one line, rather than a list, is read as
+  a list of that line, since a retried session costs more than the leniency. Don't make the harness's own files lenient
 - **Parameter properties aren't allowed**: the TypeScript configuration has `erasableSyntaxOnly`, since Node.js runs
   the sources as they are. Declare each field, and assign it in the constructor
 

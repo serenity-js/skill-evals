@@ -17,6 +17,8 @@ export interface ItemCalibration {
     failsCaught: Share;
     /** The same, of the held-out verdicts only, which the decision uses: the guide cites the others' failures to the judge */
     heldOutFailsCaught: Share;
+    /** Of the reviewer's held-out passes, how many the judge's majority passed too */
+    heldOutPassesKept: Share;
     /** Split and incomplete results count against the agreement; missing ones, where no session gave a verdict, don't count at all */
     confusion: Record<Difference, number>;
     /** Of the runs with two sessions' verdicts or more, how many had every session agree */
@@ -106,6 +108,7 @@ export class CalibrationReport {
         const evidence = {
             heldOut: CalibrationReport.agreementOf(comparisons.filter(comparison => comparison.heldOut)),
             heldOutFailsCaught: Share.counting(fails.filter(comparison => comparison.heldOut), comparison => comparison.judgeFails()),
+            heldOutPassesKept: Share.counting(comparisons.filter(comparison => comparison.heldOut && comparison.isReviewersPass()), comparison => comparison.judgePasses()),
         };
         return {
             item: comparisons[0].item,
@@ -114,6 +117,7 @@ export class CalibrationReport {
             heldOut: evidence.heldOut,
             failsCaught: Share.counting(fails, comparison => comparison.judgeFails()),
             heldOutFailsCaught: evidence.heldOutFailsCaught,
+            heldOutPassesKept: evidence.heldOutPassesKept,
             confusion: Object.fromEntries(Comparison.differences.map(({ name }) => [ name, comparisons.filter(comparison => comparison.difference() === name).length ])) as Record<Difference, number>,
             unanimous: Share.counting(comparisons.filter(comparison => comparison.ballot.canBeUnanimous()), comparison => comparison.ballot.isUnanimous()),
             ...protocol.decide(evidence),

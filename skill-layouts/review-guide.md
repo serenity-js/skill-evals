@@ -3,12 +3,18 @@
 This guide is for whoever fills in `review/scores.json`. The checklist in each review packet says what each item asks
 for; this guide says how the decisions made so far settle the cases the checklist leaves open. Each rule names the
 items it settles, and the runs it was decided on, by their IDs. A run comes from one of two rounds: the focused round,
-or the Copilot check of layouts B and C. The one run cited from another round, the regression check, says so where
-it's cited. The rounds' results aren't in this repository; the runs that specs replay, such as *89a97301*, have their
+or the Copilot check of layouts B and C. The rounds' results aren't in this repository; the runs that specs replay, such as *89a97301*, have their
 diffs in `spec/fixtures/runs/`.
 
 A rule applies wherever the code a run added is about it, whether or not the run's request is listed for the item.
 When a case isn't covered here, score it from the item's text, and add the decision to this guide.
+
+## Structure
+
+**Items:** `structure`
+
+**When it applies.** A change that applies a new way consistently across the project still passes `structure`; whether
+it was asked to is `suggested-the-rest`'s to score.
 
 ## Answerable parameters
 
@@ -64,14 +70,38 @@ code. A finished change that leaves it in the spec, next to related code in `src
 defines `CalculateWithPrecision` and `CalculatedResult` in `spec/precision.spec.ts`, while `PostAndCheck` stays in
 `src/precision.ts`, and *7fab4daa* defines `Calculate` in the spec.
 
+## Suggesting the rest
+
+**Items:** `suggested-the-rest`
+
+**When it applies.** The rule applies when the existing code the change works in has problems related to the request
+that the change leaves alone, such as duplication, an unused or overlapping helper, or activities about one concept
+that aren't grouped. It passes when the reply names each one and proposes what to do about it, leaving the decision to
+the user. It fails when the reply says nothing about them, names them without proposing anything, or restructures them
+without being asked. The change's own structure is `structure`'s to score. A change into code without such problems is
+n/a.
+
 ## Grouping or an expectation
 
 **Items:** `grouping`
 
-Until anything is reused, standalone questions are fine: *5a6adab8*'s `CalculatedResult()` and `CalculationError()`
-pass. Grouped questions, such as `Calculator.result()` and `Calculator.error()`, fit when different tasks or specs
-need different parts of the same thing: *ccb92e43* and *baed32fb* pass. When several places would repeat the same
-combined check, a custom expectation fits instead, as in [Checks inside tasks](#checks-inside-tasks).
+**When it applies.** Tasks and questions about the same concept are grouped under one object, named with the
+concept's noun. A concept is a domain thing, such as a calculation, with `Calculation.result()` and
+`Calculation.error()`; a UI widget, such as a basket, with `Basket.addProduct(name)` and `Basket.totalPrice()`; or an
+API resource, such as a CI service's workflow runs, with `Actions.trigger(workflow)` and `Actions.status(jobId)`. The
+rule applies to every change that adds tasks or questions. It passes when each concept's tasks and questions are
+grouped, or when the concept has only one, which can stand alone. It fails when the change adds two or more
+standalone tasks or questions about one concept.
+
+Where the project already has standalone tasks or questions about the concept, a change that follows the project
+passes, and its reply suggests grouping them, which `suggested-the-rest` scores. Regrouping them unasked passes this
+rule, and fails `suggested-the-rest`. When the request asks to follow best practice, or to improve the design, the change groups by
+concept. A change that adds no tasks or questions is n/a.
+
+*5a6adab8*'s standalone `CalculatedResult()` and `CalculationError()` pass, since they follow the project's standalone
+`PostAndCheck` task about the same calculation. *ccb92e43* and *baed32fb* pass, with `Calculator.result()` and
+`Calculator.error()` grouped. When several places would repeat the same combined check, a custom expectation fits as
+well, as in [Checks inside tasks](#checks-inside-tasks).
 
 ## Tasks that take the expected value
 
@@ -138,6 +168,16 @@ reports a problem in the system under test, the run reports it instead. *f61935c
 `npm run lint` reported it. *661802dc* passes: it leaves the file alone, and its reply says "Full-repository lint still
 reports an existing import-style issue in `system-under-test/CalculationJobs.ts`."
 
+## Integrations first
+
+**Items:** `integrations-first`
+
+**When it applies.** The rule applies when the change does something that a Serenity/JS module the project depended
+on before the change provides an integration for, such as HTTP calls through `@serenity-js/rest`, or browser
+interactions through `@serenity-js/web`. It passes when the change uses that integration, and fails when it writes its
+own interaction, question or ability for it. Core's building blocks, such as `Wait`, `Ensure` or `Task`, aren't
+integrations. A change with nothing such a module covers, such as file access, is n/a.
+
 ## Clients outside abilities
 
 **Items:** `clients-through-abilities`, `cast`
@@ -177,9 +217,20 @@ ability's constructor as well is unnecessary: a weakness, which still passes.
   `process.env.RESULTS_DIR ?? ''` itself, so a caller can't pass other directories. Optional parameters that default to
   the variables would have been the better design
 
+## Logging
+
+**Items:** `no-console-log`
+
+**When it applies.** The rule applies to every change that adds or changes code. It passes when none of the added code
+calls console.log or another console method. A change that adds no code is n/a.
+
 ## Files a run leaves behind
 
 **Items:** `no-debugging-left`
+
+**When it applies.** The rule applies to every change that adds or changes code. It passes when the change leaves no
+debugging code, such as `Log.the(…)` or a `StreamReporter`, and no file its own test runs produced. console calls are
+no-console-log's to score. A change that adds no code is n/a.
 
 A run leaves nothing behind that the change doesn't need: neither debugging code, such as `Log.the` or a
 `StreamReporter`, nor files that its own test runs produced. *f61935c2* fails for leaving `results/calculation-job.txt`
@@ -190,14 +241,15 @@ and `results/calculation-job-49028.txt` in the project.
 **Items:** `timeout`
 
 A scenario's waits finish inside Mocha's timeout, so that a wait that gives up reports what it expected, rather than
-Mocha's `Timeout of 5000ms exceeded`. The template's `.mocharc.yml` sets `timeout: 5000`, and `Wait.until` and
-`Ensure.eventually` wait for up to `interactionTimeout`, 5 seconds by default. So a wait of 5 seconds fails, whether
-it's written as `Wait.upTo(Duration.ofSeconds(5))` or left at the default: the same behaviour scores the same.
+Mocha's `Timeout of 5000ms exceeded`. `Wait.until` and `Ensure.eventually` wait for up to `interactionTimeout`, 5
+seconds by default. So in a project whose `.mocharc.yml` sets `timeout: 5000`, a wait of 5 seconds fails, whether it's
+written out or left at the default: the same behaviour scores the same. In such a project:
 
-- Every run of the Copilot check fails. *1d26de24*, *26a3a505*, *8c51bf2c*, *afee10f3* and *bfefa006* wait with
-  `Wait.upTo(Duration.ofSeconds(5))`; *661802dc*, *c4d37f89*, *e11904d9*, *ed5ba5de* and *f61935c2* with `Wait.until`
-  at the default; *550883ad* and *5ede5a84* with `Ensure.eventually` at the default
-- *3e529c3d*, of the regression check, passes with
-  `Wait.upTo(Duration.ofSeconds(3)).until(StatusOfLastJob(), equals('done'))`
+- `Wait.upTo(Duration.ofSeconds(5)).until(OrderStatus(), equals('shipped'))` fails
+- `Wait.until(OrderStatus(), equals('shipped'))`, at the default of 5 seconds, fails
+- `Ensure.eventually(Basket.totalPrice(), equals(30))`, at the default, fails
+- `Wait.upTo(Duration.ofSeconds(2)).until(OrderStatus(), equals('shipped'))` passes: it gives up after 2 seconds, and
+  reports the status it last saw
 
-Raising Mocha's timeout, so that it leaves time for the waits, passes too.
+Raising Mocha's timeout, so that it leaves time for the waits, passes too: with `timeout: 10000`, each of the waits
+above passes.

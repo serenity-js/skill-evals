@@ -1,6 +1,7 @@
 // The judge's verdicts.json, read with the same field-by-field validation as the harness's other files, in records.ts,
-// so that a malformed entry is reported as one in a result.json would be: by its path in the file.
-import { aString, expecting, fields, listOf, oneOf, parseJson, validated } from '../records.ts';
+// so that a malformed entry is reported as one in a result.json would be: by its path in the file. Unlike the harness's
+// own files, it's lenient in one way, about the judge's evidence: see aLineOrLines.
+import { aString, type Check, expecting, fields, listOf, oneOf, parseJson, validated } from '../records.ts';
 import { Verdict, type VerdictName } from './verdict.ts';
 
 /** What the judge decides about one rule, and why. */
@@ -39,6 +40,17 @@ export class RuleVerdict {
 
 const aReason = expecting("a reason that isn't blank", value => typeof value === 'string' && value.trim() !== '');
 
+/**
+ * The judge's evidence: a list of lines, or one line, which the judge often gives instead of a list of one. Reading it
+ * as that list, rather than retrying the session, is a leniency for the judge's output only; the files the harness
+ * writes itself are read as strictly as their schema says.
+ */
+const aLineOrLines: Check = (value, path, file) => (typeof value === 'string' ? aString : listOf(aString))(value, path, file);
+
+/** Evidence as a list of lines: one line, as a list of it, or none, when the line is blank */
+const asLines = (evidence: string | string[]): string[] =>
+    typeof evidence !== 'string' ? evidence : evidence.trim() === '' ? [] : [ evidence ];
+
 /** A verdicts.json, as the judge left it: one verdict for every rule, or what's wrong with it. */
 export class JudgeVerdicts {
 
@@ -47,16 +59,16 @@ export class JudgeVerdicts {
         if (text === undefined) {
             return new JudgeVerdicts(undefined, [ `there's no ${ file }` ]);
         }
-        let parsed: { verdicts: Array<{ rule: string, verdict: VerdictName, evidence: string[], reason: string }> };
+        let parsed: { verdicts: Array<{ rule: string, verdict: VerdictName, evidence: string | string[], reason: string }> };
         try {
             parsed = validated(parseJson(text, file), fields({
-                verdicts: listOf(fields({ rule: oneOf(rules), verdict: oneOf(Verdict.names), evidence: listOf(aString), reason: aReason })),
+                verdicts: listOf(fields({ rule: oneOf(rules), verdict: oneOf(Verdict.names), evidence: aLineOrLines, reason: aReason })),
             }), file);
         }
         catch (error) {
             return new JudgeVerdicts(undefined, [ (error as Error).message ]);
         }
-        const verdicts = parsed.verdicts.map(entry => RuleVerdict.fromJSON(entry));
+        const verdicts = parsed.verdicts.map(entry => RuleVerdict.fromJSON({ ...entry, evidence: asLines(entry.evidence) }));
         const problems = [
             ...verdicts.flatMap((verdict, index) => {
                 const first = verdicts.findIndex(other => other.rule === verdict.rule);

@@ -71,7 +71,7 @@ describe('reviewPacket', () => {
 
     it('lists the checklist to score, and says which items are the reviewer\'s alone', () => {
         expect(packet).toContain('- [ ] actor-names: the actors a change introduces are named after the role they play, from an enum or constants');
-        expect(packet).toContain('- [ ] no-console-log: no console.log added (reviewer only: the AST patterns leave it n/a)');
+        expect(packet).toContain('- [ ] no-console-log: no console.log, or call of another console method, added; it applies to every change that adds or changes code, and is n/a only for a change that adds none (reviewer only: the AST patterns leave it n/a)');
     });
 
     it("shows the agent's final reply, with the names and paths of skills hidden, where its suggestions are", () => {

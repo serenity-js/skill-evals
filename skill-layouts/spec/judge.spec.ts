@@ -55,6 +55,18 @@ describe('the judge', () => {
             expect(read_.verdicts?.[0].verdict).toBe(Verdict.fail);
         });
 
+        it("reads evidence given as one line, rather than a list, as a list of that line, which only the judge's output may give", () => {
+            const read_ = read(json({ verdicts: [ { ...verdicts[0], evidence: verdicts[0].evidence[0] }, verdicts[1] ] }));
+
+            expect(read_.problems).toEqual([]);
+            expect(read_.verdicts?.[0].evidence).toEqual(verdicts[0].evidence);
+        });
+
+        it('reads evidence given as a blank line as no evidence, which a pass or a fail needs', () => {
+            expect(read(json({ verdicts: [ { ...verdicts[0], verdict: 'pass', evidence: ' ' }, verdicts[1] ] })).problems)
+                .toEqual([ 'verdicts.json: verdicts[0].evidence is empty, but a pass needs the lines it rests on' ]);
+        });
+
         it('takes n/a without evidence', () => {
             const na = { rule: 'no-console-log', verdict: 'n/a', evidence: [], reason: 'Nothing is logged.' };
             expect(read(json({ verdicts: [ verdicts[0], na ] })).problems).toEqual([]);
@@ -68,7 +80,8 @@ describe('the judge', () => {
             [ 'a rule scored twice', json({ verdicts: [ ...verdicts, verdicts[0] ] }), 'verdicts.json: verdicts[2].rule is "awaiting", which verdicts[0] scored already' ],
             [ 'a verdict that isn\'t one', json({ verdicts: [ { ...verdicts[0], verdict: 'Pass' }, verdicts[1] ] }), 'verdicts.json: verdicts[0].verdict is "Pass", not one of pass, fail, n/a' ],
             [ 'a fail without evidence', json({ verdicts: [ { ...verdicts[0], evidence: [] }, verdicts[1] ] }), 'verdicts.json: verdicts[0].evidence is empty, but a fail needs the lines it rests on' ],
-            [ 'evidence that isn\'t a list', json({ verdicts: [ { ...verdicts[0], evidence: 'line 16' }, verdicts[1] ] }), 'verdicts.json: verdicts[0].evidence is "line 16", not a list' ],
+            [ 'evidence that\'s neither a line nor a list', json({ verdicts: [ { ...verdicts[0], evidence: 16 }, verdicts[1] ] }), 'verdicts.json: verdicts[0].evidence is 16, not a list' ],
+            [ 'evidence with a line that isn\'t text', json({ verdicts: [ { ...verdicts[0], evidence: [ 16 ] }, verdicts[1] ] }), 'verdicts.json: verdicts[0].evidence[0] is 16, not a string' ],
             [ 'no reason', json({ verdicts: [ { ...verdicts[0], reason: ' ' }, verdicts[1] ] }), 'verdicts.json: verdicts[0].reason is " ", not a reason that isn\'t blank' ],
             [ 'a rule left out', json({ verdicts: [ verdicts[0] ] }), 'verdicts.json: verdicts has no verdict for no-console-log' ],
         ])('refuses %s, and says why, naming the field as records.ts does', (_, content, problem) => {
@@ -83,8 +96,29 @@ describe('the judge', () => {
     describe('JudgePrompt', () => {
 
         it('asks for the verdicts file, and, for a change without its project, says to score its diff', () => {
-            expect(JudgePrompt.forProject().text).toContain('Write `verdicts.json` as { "verdicts": [ { "rule", "verdict", "evidence", "reason" } ] }');
+            expect(JudgePrompt.forProject().text).toContain('Write `verdicts.json`, with one entry for every rule, in this shape:');
             expect(JudgePrompt.forDiffAlone().text).toBe(`${ JudgePrompt.forProject().text }\n\nThis change's project isn't available: there's no \`before/\` or \`after/\`. Score it from \`change.diff\`, whose context lines show the code around each change,\nand give the evidence as \`change.diff:<line>: <code>\`.`);
+        });
+
+        it("shows verdicts.json's exact shape, with the evidence as a list of lines, even of one line", () => {
+            const text = JudgePrompt.forProject().text;
+            const example = /```json\n([\s\S]+?)\n```/.exec(text)?.[1];
+
+            expect(example).toBeDefined();
+            const shown = JSON.parse(example!);
+            expect(Object.keys(shown)).toEqual([ 'verdicts' ]);
+            expect(shown.verdicts.map((verdict: object) => Object.keys(verdict))).toEqual(shown.verdicts.map(() => [ 'rule', 'verdict', 'evidence', 'reason' ]));
+            expect(shown.verdicts.every((verdict: { evidence: unknown }) => Array.isArray(verdict.evidence))).toBe(true);
+            expect(shown.verdicts.map((verdict: { verdict: string }) => verdict.verdict)).toEqual([ 'pass', 'fail', 'n/a' ]);
+            expect(text).toContain('`evidence` is always a list, even of one line');
+        });
+
+        it("says when a rule applies, unless the rule's own README says otherwise", () => {
+            const text = JudgePrompt.forProject().text;
+
+            expect(text).toContain('A rule that forbids something, or asks for something under a condition, applies to every change that adds code the rule is about, and passes when the change doesn\'t break it.');
+            expect(text).toContain('n/a is only for a change that adds nothing the rule is about.');
+            expect(text).toContain('Where a rule\'s README has a "When it applies" paragraph that says otherwise, the rule\'s paragraph wins.');
         });
 
         it('tells a second session what was wrong with the first one\'s verdicts', () => {

@@ -80,6 +80,14 @@ export class Comparison {
         return this.ballot.majority === Verdict.fail;
     }
 
+    isReviewersPass(): boolean {
+        return this.reviewer === Verdict.pass;
+    }
+
+    judgePasses(): boolean {
+        return this.ballot.majority === Verdict.pass;
+    }
+
     /** Where it falls in the table of differences, or undefined when the judge agrees */
     difference(): Difference | undefined {
         return Comparison.differences.find(column => column.counts(this.reviewer, this.ballot))?.name;
