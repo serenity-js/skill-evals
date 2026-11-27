@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
-    "node": "^24.15.0"
+    "node": "^26.0.0"
   },
   "packageManager": "pnpm@12.23.0",
   "scripts": {
@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@ast-grep/napi": "0.51.3",
-    "@types/node": "24.19.2",
+    "@types/node": "26.6.11",
     "mathjs": "15.3.0",
     "typescript": "7.0.2",
     "vitest": "5.1.2",
