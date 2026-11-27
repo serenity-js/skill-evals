@@ -399,6 +399,51 @@ focus round took 0.7 to 1.3 credits and 30 to 50 seconds each. A judge's session
 1.5 credits each, 85 to 250 credits in all, and a few hours, since the sessions run one at a time.
 `calibration.md` reports what they actually used.
 
+## Specs directories
+
+The requests, the fixtures and the conventions are to move out of the harness, into a specs directory it's given.
+`--validate` checks one. Nothing else reads a specs directory yet: the runs still read `requests.json`, `fixtures/`
+and `conventions.ts`.
+
+```bash
+pnpm run eval:skill-layouts -- --validate --specs ~/Projects/my-specs
+```
+
+It needs no template, checkout or network. It lists every problem it finds, each with its file, and fails when there's
+any. A specs directory holds:
+
+- `cases/<case>/`: `prompt.md`, the request; `case.json`, with its `kind`, its `project`, the `rules` it exercises, the
+  `skills` files an agent has to read, as `<package>/<skill>/<path>`, and the `apis` its scenarios call; and
+  `expected/`, its reference solution, with at most one `// wrong:` marker
+- `projects/<project>/`: `project.json`, with the `template`'s repository and commit, and optionally the
+  `replacements`, `directories` and `ignored` paths; and optionally `fixture/`, which is copied over the template
+- `rules/<rule>/`: `README.md`, whose frontmatter has the rule's `title`, its `source`, as
+  `<package>/<skill>/<path>#<section>`, and optionally `followsTheProject`; and its examples. A pattern rule also has
+  `rule.yml`, an ast-grep rule that finds violations, and `applies.yml`, one that finds the code the rule applies to.
+  A rule the judge scores has the README alone. `--validate` refuses a rule with one of `rule.yml` and `applies.yml`
+  but not the other
+
+The patterns' verdict depends only on the lines a change added, as `conventions.ts` decides it: fail when a violation
+is on one, pass otherwise when code the rule applies to is, and n/a otherwise. Without `applies.yml`, a rule could
+fail, but never pass, which is why it's required. `rule.yml` and `applies.yml` are ast-grep's rule configuration, for
+TypeScript, with the rule's directory as `id`, or the directory and `.applies`; `@ast-grep/napi` runs their `rule`,
+`constraints` and `utils`.
+
+`followsTheProject` exempts what the project already did before the change:
+
+- `file`: a violation doesn't count in a file that has one on a line the change didn't add
+- `project`: no violation counts when any file had one before the change, or a changed file has one on a line the
+  change didn't add
+
+Every rule has at least one `pass/` and one `fail/` example, and may have `n-a/` ones. An example is a `.ts` file, all
+of it added, or a directory with `after/`, and optionally `before/`, whose added lines are
+`git diff --no-index before after`'s, with `request.md` and `reply.md` for a rule about the request or the reply.
+`--validate` scores every pattern rule's examples, with the same code that will score runs, and reports each verdict
+that isn't its directory's, with the code it came from. It doesn't judge the judge's rules' examples, only checks
+they're there.
+
+`spec/fixtures/specs/` is a made-up specs directory, which the specs check.
+
 ## Options
 
 Run the evaluation from your own terminal, not from inside a sandbox: the harness runs `tsc` and `npm test` under
@@ -875,6 +920,13 @@ These are to be fixed in the next pull requests, each with a failing spec first:
 - **The checks are only sandboxed on macOS.** On Linux, `tsc` and `npm test` only run given `--unsandboxed`, with your
   access to your files and the network. Linux needs a backend of its own, such as bubblewrap, as another
   `ChecksSandbox` in `sandbox.ts`, whose specs CI's Linux job would run
+- **`spec/child-processes.spec.ts`'s specs of a daemon and its output fail now and then when the machine is busy,**
+  as they did in the runs of #19 and of #20, and pass when run again. "collects what it prints, says which output
+  printed each chunk, and stops it", under `startDaemon`, expects each of the daemon's writes to arrive as a chunk of
+  its own. A pipe doesn't promise that: on a busy machine, a chunk can hold a write and whatever else the process
+  printed to the same stream, such as Node.js's own warnings. Started 60 at once, 27 of the daemons delivered
+  `warning` and other output on stderr in one chunk. The spec should compare each stream's output joined, not the
+  chunks
 
 ## Developing the harness
 

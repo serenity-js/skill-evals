@@ -3,6 +3,7 @@
 //                                  --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]
 // pnpm run eval:skill-layouts -- --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]
 // pnpm run eval:skill-layouts -- --calibrate --rounds <dir>,<dir> --template <dir> --out <dir> [--work <dir>]
+// pnpm run eval:skill-layouts -- --validate --specs <dir>
 //
 // Evaluates how a package's skills should be laid out: packs the Serenity/JS packages, gives them each layout's
 // skills, installs them into copies of the Mocha template, runs Kiro and GitHub Copilot on each request, and scores the
@@ -29,6 +30,8 @@ import { evalRoot, isLayout, type Layout, LAYOUTS } from './layouts.ts';
 import { checkExamples, checkTemplateCommit, layoutTarballs, packPackages, prepareProject } from './project.ts';
 import { compareResults } from './compare.ts';
 import { checkReference, type ReferenceCheck, referenceFilesOf, renderReferenceCheck, withoutMarkers } from './references.ts';
+import { gitDirectoryDiff } from './rules.ts';
+import { Specs } from './specs.ts';
 import { loadRequests, type Request } from './requests.ts';
 import { type Agent, AGENTS, combineVerdicts, disagreements, type PlannedRun, planRuns, REVIEW_GUIDE, type RunKey, scoresTemplate } from './review.ts';
 import { harnessBlinding, harnessSkillDirectories } from './harness-skills.ts';
@@ -68,21 +71,26 @@ export interface Arguments {
     calibrateOnly: boolean;
     /** The recorded rounds' results that --calibrate reads, each a mode's directory, such as `<round>/pilot` */
     rounds: string[];
+    /** Only check the specs directory, and list everything that's wrong with it */
+    validateOnly: boolean;
+    /** The specs directory --validate checks */
+    specs: string | undefined;
 }
 
 const USAGE = 'usage: eval:skill-layouts [--pilot [--layouts <list>] [--requests <list>] [--repeats <n>] | --smoke | --held-back <layout>] [--agent <kiro|copilot>] [--prepare-only | --summarise | --compare | --rescore | --reparse | --rescore-checks] --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]\n'
     + '       eval:skill-layouts --check-references --serenity-js <clone> --out <dir> [--template <dir>] [--work <dir>] [--unsandboxed]\n'
-    + '       eval:skill-layouts --calibrate --rounds <dir>,<dir> --template <dir> --out <dir> [--work <dir>]';
+    + '       eval:skill-layouts --calibrate --rounds <dir>,<dir> --template <dir> --out <dir> [--work <dir>]\n'
+    + '       eval:skill-layouts --validate --specs <dir>';
 
 export function parseArguments(argv: string[], cwd: string): Arguments {
     const options = new Map<string, string>();
     const flags = new Set<string>();
     for (let index = 0; index < argv.length; index++) {
         const argument = argv[index];
-        if ([ '--pilot', '--smoke', '--prepare-only', '--summarise', '--rescore', '--reparse', '--rescore-checks', '--check-references', '--compare', '--unsandboxed', '--calibrate' ].includes(argument)) {
+        if ([ '--pilot', '--smoke', '--prepare-only', '--summarise', '--rescore', '--reparse', '--rescore-checks', '--check-references', '--compare', '--unsandboxed', '--calibrate', '--validate' ].includes(argument)) {
             flags.add(argument);
         }
-        else if ([ '--serenity-js', '--template', '--out', '--work', '--held-back', '--agent', '--layouts', '--requests', '--repeats', '--rounds' ].includes(argument) && argv[index + 1] && ! argv[index + 1].startsWith('--')) {
+        else if ([ '--serenity-js', '--template', '--out', '--work', '--held-back', '--agent', '--layouts', '--requests', '--repeats', '--rounds', '--specs' ].includes(argument) && argv[index + 1] && ! argv[index + 1].startsWith('--')) {
             options.set(argument, argv[++index]);
         }
         else if (argument !== '--') {
@@ -154,12 +162,21 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
     if (calibrateOnly !== (rounds !== undefined)) {
         throw new Error(`--calibrate and --rounds <dir>,<dir> go together: the recorded rounds' results, each a mode's directory, such as <round>/pilot\n${ USAGE }`);
     }
+    // it reads the specs directory only, so it takes nothing else
+    const validateOnly = flags.has('--validate');
+    const specs = options.get('--specs');
+    if (validateOnly !== (specs !== undefined)) {
+        throw new Error(`--validate and --specs <dir> go together: the specs directory to check, with its cases/, rules/ and projects/\n${ USAGE }`);
+    }
+    if (validateOnly && (flags.size > 1 || options.size > 1)) {
+        throw new Error(USAGE);
+    }
     const serenityJs = options.get('--serenity-js');
-    if (! serenityJs && ! calibrateOnly && ! summariseOnly && ! rescoreOnly && ! reparseOnly && ! compareOnly && ! rescoreChecksOnly) {
+    if (! serenityJs && ! validateOnly && ! calibrateOnly && ! summariseOnly && ! rescoreOnly && ! reparseOnly && ! compareOnly && ! rescoreChecksOnly) {
         throw new Error(`--serenity-js <clone> is required: a compiled clone of serenity-js/serenity-js on the branch with the skills\n${ USAGE }`);
     }
     const out = options.get('--out');
-    if (! out) {
+    if (! out && ! validateOnly) {
         throw new Error(`--out <dir> is required: where the results go, one directory per mode, e.g. --out ~/skill-layouts-results\n${ USAGE }`);
     }
     const clone = resolve(cwd, serenityJs ?? '.');
@@ -168,7 +185,8 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
         mode,
         serenityJs: clone,
         template: resolve(cwd, options.get('--template') ?? join(dirname(clone), 'serenity-js-mocha-template')),
-        out: resolve(cwd, out),
+        // --validate writes nothing
+        out: out ? resolve(cwd, out) : '',
         work: resolve(cwd, options.get('--work') ?? join(tmpdir(), 'skill-layouts')),
         prepareOnly: flags.has('--prepare-only'),
         summariseOnly,
@@ -181,6 +199,8 @@ export function parseArguments(argv: string[], cwd: string): Arguments {
         unsandboxed: flags.has('--unsandboxed'),
         calibrateOnly,
         rounds: (rounds ?? []).map(round => resolve(cwd, round)),
+        validateOnly,
+        specs: specs === undefined ? undefined : resolve(cwd, specs),
     };
 }
 
@@ -689,11 +709,30 @@ export async function calibrateJudge(args: Arguments, { config = loadConfig(), e
     log(`the judge's verdicts compared with the reviewer's: ${ new CalibrationFiles(args.out).markdown }`);
 }
 
+/**
+ * Checks a specs directory: its layout, its files' fields, what its cases name, its reference solutions' markers, and
+ * every pattern rule against its examples. Throws with every problem, each with its file, when there's any.
+ */
+export function validateSpecs(directory: string, logged: (message: string) => void = log): void {
+    const specs = Specs.read(directory, gitDirectoryDiff(run));
+    const problems = specs.validate();
+    if (problems.length > 0) {
+        throw new Error([ `${ directory } has ${ counted(problems.length, 'problem') }:`, ...problems.map(problem => `  ${ problem }`) ].join('\n'));
+    }
+    const examples = [ ...specs.rules.values() ].filter(rule => rule.patterns).reduce((sum, rule) => sum + rule.examples.length, 0);
+    logged(`${ directory } is valid: ${ counted(specs.cases.size, 'case') }, ${ counted(specs.projects.size, 'project') } and ${ counted(specs.rules.size, 'rule') }, with the patterns' ${ counted(examples, 'example') } checked`);
+}
+
+const counted = (count: number, thing: string) => `${ count } ${ thing }${ count === 1 ? '' : 's' }`;
+
 if (import.meta.main) {
     try {
         const args = parseArguments(process.argv.slice(2), process.cwd());
         const store = Results.of(args.out, args.mode);
-        if (args.calibrateOnly) {
+        if (args.validateOnly) {
+            validateSpecs(args.specs!);
+        }
+        else if (args.calibrateOnly) {
             await calibrateJudge(args);
         }
         else if (args.compareOnly) {

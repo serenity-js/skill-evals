@@ -1,0 +1,8 @@
+id: const-over-let
+language: TypeScript
+rule:
+  matches: declaration-with
+utils:
+  declaration-with:
+    kind: lexical_declaration
+    regex: ^let\s

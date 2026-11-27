@@ -145,6 +145,34 @@ export function problemsWithLinkedSkills(project: string, layoutSkillDirectories
     });
 }
 
+const ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 };
+
+/**
+ * A path as `git diff` names it: as it is, or in quotes, with C's escapes, when it has a quote, a backslash or a control
+ * character, or a non-ASCII one without core.quotePath=false, such as `"b/caf\303\251.ts"` for `b/café.ts`.
+ */
+function unquoted(path: string): string {
+    if (! path.startsWith('"')) {
+        return path;
+    }
+    const bytes: number[] = [];
+    for (let index = 1; index < path.length - 1; index++) {
+        if (path[index] !== '\\') {
+            const character = String.fromCodePoint(path.codePointAt(index)!);
+            bytes.push(...Buffer.from(character));
+            index += character.length - 1;
+        }
+        else if (/[0-7]{3}/.test(path.slice(index + 1, index + 4))) {
+            bytes.push(Number.parseInt(path.slice(index + 1, index + 4), 8));
+            index += 3;
+        }
+        else {
+            bytes.push(ESCAPES[path[++index]] ?? path.charCodeAt(index));
+        }
+    }
+    return Buffer.from(bytes).toString('utf8');
+}
+
 /** The lines each file gained, from `git diff`, with or without context, by the 1-based line numbers of the new file. */
 export function addedLinesOf(diff: string): Map<string, Set<number>> {
     const added = new Map<string, Set<number>>();
@@ -152,7 +180,8 @@ export function addedLinesOf(diff: string): Map<string, Set<number>> {
     let line = 0;
     for (const text of diff.split('\n')) {
         if (text.startsWith('+++ ')) {
-            file = text === '+++ /dev/null' ? undefined : text.replace(/^\+\+\+ b\//, '');
+            // git ends the line with a tab when the path has a space
+            file = text === '+++ /dev/null' ? undefined : unquoted(text.slice(4).replace(/\t$/, '')).replace(/^b\//, '');
             continue;
         }
         const hunk = /^@@ -\S+ \+(\d+)(?:,\d+)? @@/.exec(text);
