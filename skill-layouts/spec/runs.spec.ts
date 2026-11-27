@@ -253,7 +253,21 @@ describe('spawnWithTimeout', () => {
     });
     afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
+    // A process that has stopped, but that its parent hasn't reaped yet, is a zombie, which kill(pid, 0) still finds. An
+    // orphan, such as the sleep a stopped shell leaves, is reaped by its new parent, init on Linux, in its own time, so
+    // on Linux, where /proc says which state a process is in, a zombie doesn't count as running.
     const isRunning = (pid: number) => {
+        if (existsSync('/proc')) {
+            try {
+                const stat = readFileSync(`/proc/${ pid }/stat`, 'utf8');
+                // the state follows the command's name, in parentheses, which may hold spaces and parentheses itself
+                const state = stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3);
+                return state !== 'Z' && state !== 'X';
+            }
+            catch {
+                return false;
+            }
+        }
         try {
             process.kill(pid, 0);
             return true;
